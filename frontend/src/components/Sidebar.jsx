@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useChatStore } from "../store/useChatStore";
 import { useAuthStore } from "../store/useAuthStore";
 import SidebarSkeleton from "./skeletons/SidebarSkeleton";
@@ -6,7 +6,6 @@ import { Users, Plus, Hash } from "lucide-react";
 import CreateGroupModal from "./CreateGroupModal";
 
 const Sidebar = () => {
-  // Lấy thêm groups và getGroups từ store đã cập nhật
   const { 
     getUsers, users, 
     getGroups, groups, 
@@ -14,19 +13,54 @@ const Sidebar = () => {
     isUsersLoading, isGroupsLoading 
   } = useChatStore();
   
-  const { onlineUsers } = useAuthStore();
+  const { onlineUsers, authUser } = useAuthStore();
   
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     getUsers();
-    getGroups(); // Gọi thêm API lấy danh sách nhóm khi component mount
+    getGroups();
   }, [getUsers, getGroups]);
 
-  const filteredUsers = showOnlineOnly
-    ? users.filter((user) => onlineUsers.includes(user._id))
-    : users;
+  // --- LOGIC 1: TỰ ĐỘNG SẮP XẾP DANH SÁCH THEO THỜI GIAN THỰC ---
+
+  // Sắp xếp Groups: Nhóm có tin nhắn mới nhất lên đầu
+  const sortedGroups = useMemo(() => {
+    return [...groups].sort((a, b) => {
+      const timeA = a.lastMessage ? new Date(a.lastMessage.createdAt) : new Date(a.createdAt);
+      const timeB = b.lastMessage ? new Date(b.lastMessage.createdAt) : new Date(b.createdAt);
+      return timeB - timeA;
+    });
+  }, [groups]);
+
+  // Sắp xếp Users: Người có tin nhắn mới nhất lên đầu
+  const sortedUsers = useMemo(() => {
+    let filtered = showOnlineOnly
+      ? users.filter((user) => onlineUsers.includes(user._id))
+      : users;
+
+    return [...filtered].sort((a, b) => {
+      const timeA = a.lastMessage ? new Date(a.lastMessage.createdAt) : new Date(a.createdAt);
+      const timeB = b.lastMessage ? new Date(b.lastMessage.createdAt) : new Date(b.createdAt);
+      return timeB - timeA;
+    });
+  }, [users, onlineUsers, showOnlineOnly]);
+
+  // --- LOGIC 2: HIỂN THỊ TIN NHẮN CUỐI CÙNG ---
+  const renderLastMessage = (item) => {
+    if (!item.lastMessage) return <span className="text-xs opacity-50 italic">Chưa có tin nhắn</span>;
+    
+    const isSentByMe = item.lastMessage.senderId === authUser._id || item.lastMessage.senderId?._id === authUser._id;
+    const prefix = isSentByMe ? "Bạn: " : "";
+    const content = item.lastMessage.image ? "📷 Hình ảnh" : item.lastMessage.text;
+    
+    return (
+      <span className="truncate block text-xs text-zinc-500">
+        {prefix}{content}
+      </span>
+    );
+  };
 
   if (isUsersLoading || isGroupsLoading) return <SidebarSkeleton />;
 
@@ -38,19 +72,18 @@ const Sidebar = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Users className="size-6" />
-              <span className="font-medium hidden lg:block">Chats</span>
+              <span className="font-medium hidden lg:block">Trò chuyện</span>
             </div>
             
             <button 
               onClick={() => setIsModalOpen(true)}
               className="p-1.5 hover:bg-base-300 rounded-lg transition-colors group"
-              title="Create new group"
+              title="Tạo nhóm mới"
             >
               <Plus className="size-5 text-zinc-400 group-hover:text-primary transition-colors" />
             </button>
           </div>
 
-          {/* Online filter toggle */}
           <div className="mt-3 hidden lg:flex items-center gap-2">
             <label className="cursor-pointer flex items-center gap-2">
               <input
@@ -59,7 +92,7 @@ const Sidebar = () => {
                 onChange={(e) => setShowOnlineOnly(e.target.checked)}
                 className="checkbox checkbox-sm"
               />
-              <span className="text-sm">Show online only</span>
+              <span className="text-sm font-medium">Đang hoạt động</span>
             </label>
           </div>
         </div>
@@ -68,13 +101,13 @@ const Sidebar = () => {
         <div className="overflow-y-auto w-full py-3">
           
           {/* --- SECTION: GROUPS --- */}
-          {groups.length > 0 && (
+          {sortedGroups.length > 0 && (
             <div className="px-5 mb-2 hidden lg:block">
-              <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Groups</span>
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Nhóm</span>
             </div>
           )}
           
-          {groups.map((group) => (
+          {sortedGroups.map((group) => (
             <button
               key={group._id}
               onClick={() => setSelectedUser(group)}
@@ -94,17 +127,19 @@ const Sidebar = () => {
               </div>
               <div className="hidden lg:block text-left min-w-0 flex-1">
                 <div className="font-medium truncate">{group.name}</div>
-                <div className="text-sm text-zinc-400">{group.members?.length} members</div>
+                <div className="truncate">
+                  {renderLastMessage(group)}
+                </div>
               </div>
             </button>
           ))}
 
           {/* --- SECTION: CONTACTS --- */}
           <div className="px-5 mt-4 mb-2 hidden lg:block">
-            <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Contacts</span>
+            <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Cá nhân</span>
           </div>
 
-          {filteredUsers.map((user) => (
+          {sortedUsers.map((user) => (
             <button
               key={user._id}
               onClick={() => setSelectedUser(user)}
@@ -126,15 +161,15 @@ const Sidebar = () => {
 
               <div className="hidden lg:block text-left min-w-0 flex-1">
                 <div className="font-medium truncate">{user.fullName}</div>
-                <div className="text-sm text-zinc-400">
-                  {onlineUsers.includes(user._id) ? "Online" : "Offline"}
+                <div className="truncate">
+                   {renderLastMessage(user)}
                 </div>
               </div>
             </button>
           ))}
 
-          {filteredUsers.length === 0 && groups.length === 0 && (
-            <div className="text-center text-zinc-500 py-4">No chats found</div>
+          {sortedUsers.length === 0 && sortedGroups.length === 0 && (
+            <div className="text-center text-zinc-500 py-4">Không có hội thoại nào</div>
           )}
         </div>
       </aside>

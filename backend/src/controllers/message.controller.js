@@ -1,44 +1,59 @@
 import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
-import Group from "../models/group.model.js"; // Đảm bảo bạn đã tạo model này
+import Group from "../models/group.model.js";
 
 import cloudinary from "../lib/cloudinary.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 
-// Lấy danh sách user cho Sidebar (giữ nguyên hoặc tùy chỉnh để lấy cả Group)
 export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
-    const filteredUsers = await User.find({ _id: { $ne: loggedInUserId } }).select("-password");
+    const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
 
-    res.status(200).json(filteredUsers);
+    const usersWithLastMsg = await Promise.all(
+      users.map(async (user) => {
+        const lastMessage = await Message.findOne({
+          $or: [
+            { senderId: loggedInUserId, receiverId: user._id },
+            { senderId: user._id, receiverId: loggedInUserId },
+          ],
+        }).sort({ createdAt: -1 });
+
+        return {
+          ...user,
+          lastMessage: lastMessage ? lastMessage : null,
+          lastMsgTime: lastMessage ? lastMessage.createdAt : user.createdAt,
+        };
+      })
+    );
+
+    usersWithLastMsg.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
+    res.status(200).json(usersWithLastMsg);
   } catch (error) {
     console.error("Error in getUsersForSidebar: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };
 
-// Lấy tin nhắn (Xử lý cả 1-1 và Group)
 export const getMessages = async (req, res) => {
   try {
     const { id: chatPartnerId } = req.params;
     const myId = req.user._id;
 
-    // Kiểm tra xem ID này là User hay Group
     const isGroup = await Group.exists({ _id: chatPartnerId });
 
     let messages;
     if (isGroup) {
-      // Nếu là group, lấy tất cả tin nhắn có groupId này
-      messages = await Message.find({ groupId: chatPartnerId }).populate("senderId", "fullName profilePic");
+      messages = await Message.find({ groupId: chatPartnerId })
+        .populate("senderId", "fullName profilePic")
+        .sort({ createdAt: 1 });
     } else {
-      // Nếu là cá nhân, lấy tin nhắn qua lại giữa 2 người
       messages = await Message.find({
         $or: [
           { senderId: myId, receiverId: chatPartnerId },
           { senderId: chatPartnerId, receiverId: myId },
         ],
-      });
+      }).sort({ createdAt: 1 });
     }
 
     res.status(200).json(messages);
@@ -48,27 +63,38 @@ export const getMessages = async (req, res) => {
   }
 };
 
-// Gửi tin nhắn (Xử lý cả 1-1 và Group)
+// Gửi tin nhắn (Cập nhật để hỗ trợ Audio)
 export const sendMessage = async (req, res) => {
   try {
-    const { text, image } = req.body;
+    const { text, image, audio } = req.body; // Nhận thêm trường audio từ body
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
     let imageUrl;
     if (image) {
-      // Upload base64 image to cloudinary
       const uploadResponse = await cloudinary.uploader.upload(image);
       imageUrl = uploadResponse.secure_url;
     }
 
-    // Kiểm tra xem đích đến là Group hay cá nhân
+    // XỬ LÝ AUDIO
+    let audioUrl;
+    if (audio) {
+      // Khi upload audio lên Cloudinary, bắt buộc phải có resource_type: "video"
+      const uploadResponse = await cloudinary.uploader.upload(audio, {
+        resource_type: "video",
+        folder: "voice_messages",
+      });
+      audioUrl = uploadResponse.secure_url;
+    }
+
     const isGroup = await Group.exists({ _id: receiverOrGroupId });
 
     const newMessageData = {
       senderId,
       text,
       image: imageUrl,
+      audio: audioUrl, // Lưu URL audio vào DB
+      messageType: audio ? "voice" : image ? "image" : "text", // Tự động định dạng loại tin nhắn
     };
 
     if (isGroup) {
@@ -80,13 +106,10 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
-    // XỬ LÝ REALTIME VỚI SOCKET.IO
+    // SOCKET REALTIME
     if (isGroup) {
-      // Gửi cho tất cả mọi người trong "phòng" group này
-      // Room này đã được người dùng tham gia (join) qua socket.on("joinGroup")
       io.to(receiverOrGroupId).emit("newMessage", newMessage);
     } else {
-      // Gửi 1-1 như cũ
       const receiverSocketId = getReceiverSocketId(receiverOrGroupId);
       if (receiverSocketId) {
         io.to(receiverSocketId).emit("newMessage", newMessage);
@@ -96,6 +119,71 @@ export const sendMessage = async (req, res) => {
     res.status(201).json(newMessage);
   } catch (error) {
     console.log("Error in sendMessage controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const deleteMessage = async (req, res) => {
+  try {
+    const { id: messageId } = req.params;
+    const userId = req.user._id;
+    const message = await Message.findById(messageId);
+
+    if (!message) return res.status(404).json({ message: "Message not found" });
+    if (message.senderId.toString() !== userId.toString()) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    // Xoá file trên Cloudinary (Cả ảnh và audio)
+    if (message.image) {
+      const publicId = message.image.split("/").pop().split(".")[0];
+      await cloudinary.uploader.destroy(publicId);
+    }
+    if (message.audio) {
+      const publicId = message.audio.split("/").pop().split(".")[0];
+      // Đối với audio/video phải chỉ định resource_type khi xoá
+      await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
+    }
+
+    await Message.findByIdAndDelete(messageId);
+
+    const targetId = message.groupId || message.receiverId;
+    if (message.groupId) {
+      io.to(targetId.toString()).emit("messageDeleted", messageId);
+    } else {
+      const receiverSocketId = getReceiverSocketId(targetId);
+      if (receiverSocketId) io.to(receiverSocketId).emit("messageDeleted", messageId);
+    }
+
+    res.status(200).json({ message: "Message deleted" });
+  } catch (error) {
+    console.log("Error in deleteMessage: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const clearChat = async (req, res) => {
+  try {
+    const { id: chatId } = req.params;
+    const myId = req.user._id;
+
+    const isGroup = await Group.exists({ _id: chatId });
+
+    if (isGroup) {
+      await Message.deleteMany({ groupId: chatId });
+    } else {
+      await Message.deleteMany({
+        $or: [
+          { senderId: myId, receiverId: chatId },
+          { senderId: chatId, receiverId: myId },
+        ],
+      });
+    }
+
+    io.to(chatId).emit("chatCleared", chatId); 
+    res.status(200).json({ message: "Chat cleared" });
+  } catch (error) {
+    console.log("Error in clearChat: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };

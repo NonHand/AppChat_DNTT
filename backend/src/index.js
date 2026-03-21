@@ -8,15 +8,18 @@ import { connectDB } from "./lib/db.js";
 
 import authRoutes from "./routes/auth.route.js";
 import messageRoutes from "./routes/message.route.js";
-import groupRoutes from "./routes/group.route.js"; // THÊM DÒNG NÀY
+import groupRoutes from "./routes/group.route.js"; 
 import { app, server } from "./lib/socket.js";
 
 dotenv.config();
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 5001;
 const __dirname = path.resolve();
 
-app.use(express.json());
+// CẬP NHẬT GIỚI HẠN DUNG LƯỢNG (Rất quan trọng cho Voice/Image Base64)
+app.use(express.json({ limit: "10mb" })); 
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
 app.use(cookieParser());
 app.use(
   cors({
@@ -27,7 +30,7 @@ app.use(
 
 app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
-app.use("/api/groups", groupRoutes); // THÊM DÒNG NÀY
+app.use("/api/groups", groupRoutes);
 
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "../frontend/dist")));
@@ -38,6 +41,6 @@ if (process.env.NODE_ENV === "production") {
 }
 
 server.listen(PORT, () => {
-  console.log("server is running on PORT:" + PORT);
+  console.log("Server is running on PORT: " + PORT);
   connectDB();
 });

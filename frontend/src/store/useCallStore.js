@@ -20,30 +20,29 @@ export const useCallStore = create((set, get) => ({
   peerConnection: null,
   startTime: null,           
 
-  // --- HÀM THIẾT LẬP LẮNG NGHE ICE CANDIDATE (QUAN TRỌNG) ---
+  // --- 1. LẮNG NGHE ICE CANDIDATE (Sửa lỗi đen hình) ---
   setupIceCandidateListener: () => {
     const { socket } = useAuthStore.getState();
     
-    // Xóa listener cũ để tránh trùng lặp
-    socket.off("ice-candidate");
+    socket.off("ice-candidate"); // Tránh lặp listener
 
     socket.on("ice-candidate", async ({ candidate }) => {
       const { peerConnection } = get();
       if (peerConnection && candidate) {
         try {
           await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log("✅ Đã nạp thành công ICE Candidate từ đối phương");
+          console.log("✅ Đã kết nối ICE Candidate");
         } catch (error) {
-          console.error("❌ Lỗi khi nạp ICE Candidate:", error);
+          console.error("❌ Lỗi nạp ICE Candidate:", error);
         }
       }
     });
   },
 
-  // --- HÀM KHỞI TẠO CUỘC GỌI (Người gọi) ---
+  // --- 2. KHỞI TẠO CUỘC GỌI (Người gọi) ---
   initiateCall: async (selectedUser) => {
     const { socket, authUser } = useAuthStore.getState();
-    get().setupIceCandidateListener(); // Bắt đầu lắng nghe ICE ngay khi gọi
+    get().setupIceCandidateListener();
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -74,22 +73,22 @@ export const useCallStore = create((set, get) => ({
       socket.emit("callUser", {
         userToCall: selectedUser._id,
         signalData: offer,
-        from: authUser._id, // Dùng ID thay vì socket.id để Backend dễ xử lý
+        from: authUser._id, 
         name: authUser.fullName 
       });
 
       set({ peerConnection: pc });
     } catch (err) {
-      console.error("Không thể truy cập Camera/Micro:", err);
+      console.error("Lỗi Camera/Micro:", err);
       set({ isCalling: false });
     }
   },
 
-  // --- HÀM NHẬN CUỘC GỌI (Người nhận) ---
+  // --- 3. NHẬN CUỘC GỌI (Người nhận) ---
   answerCall: async () => {
     const { socket, authUser } = useAuthStore.getState();
     const { caller } = get();
-    get().setupIceCandidateListener(); // Bắt đầu lắng nghe ICE ngay khi nhận
+    get().setupIceCandidateListener();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -109,7 +108,6 @@ export const useCallStore = create((set, get) => ({
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          // Gửi về phía người gọi (caller.from)
           socket.emit("ice-candidate", { to: caller.from, candidate: event.candidate });
         }
       };
@@ -127,28 +125,40 @@ export const useCallStore = create((set, get) => ({
       socket.emit("answerCall", { signal: answer, to: caller.from });
       set({ peerConnection: pc });
     } catch (err) {
-      console.error("Lỗi khi trả lời cuộc gọi:", err);
+      console.error("Lỗi trả lời cuộc gọi:", err);
     }
   },
 
-  // --- HÀM KẾT THÚC CUỘC GỌI ---
+  // --- 4. KẾT THÚC CUỘC GỌI (Sửa lỗi mất tin nhắn log) ---
   leaveCall: () => {
     const { socket, authUser } = useAuthStore.getState();
-    const { peerConnection, myStream, remoteUser, caller, startTime } = get();
+    const { peerConnection, myStream, remoteUser, caller, startTime, callAccepted } = get();
 
-    const duration = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+    // Tính thời lượng (giây)
+    const duration = (startTime && callAccepted) ? Math.floor((Date.now() - startTime) / 1000) : 0;
 
+    // Ngắt camera/mic
     if (myStream) {
       myStream.getTracks().forEach(track => track.stop());
     }
 
+    // Đóng kết nối Peer
     if (peerConnection) {
       peerConnection.close();
     }
 
+    // Xác định người nhận để gửi endCall và lưu Log
     const targetId = remoteUser?._id || caller?.from;
-    socket.emit("endCall", { to: targetId });
-    socket.off("ice-candidate"); // Tắt lắng nghe khi kết thúc
+
+    if (targetId) {
+      socket.emit("endCall", { 
+        to: targetId, 
+        duration: duration,
+        senderId: authUser._id // QUAN TRỌNG: Backend cần cái này để lưu tin nhắn
+      });
+    }
+
+    socket.off("ice-candidate");
 
     set({
       isCalling: false,

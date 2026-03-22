@@ -10,7 +10,8 @@ const Sidebar = () => {
     getUsers, users, 
     getGroups, groups, 
     selectedUser, setSelectedUser, 
-    isUsersLoading, isGroupsLoading 
+    isUsersLoading, isGroupsLoading,
+    unreadCounts // Lấy state đếm tin nhắn từ store
   } = useChatStore();
   
   const { onlineUsers, authUser } = useAuthStore();
@@ -24,8 +25,6 @@ const Sidebar = () => {
   }, [getUsers, getGroups]);
 
   // --- LOGIC 1: TỰ ĐỘNG SẮP XẾP DANH SÁCH THEO THỜI GIAN THỰC ---
-
-  // Sắp xếp Groups: Nhóm có tin nhắn mới nhất lên đầu
   const sortedGroups = useMemo(() => {
     return [...groups].sort((a, b) => {
       const timeA = a.lastMessage ? new Date(a.lastMessage.createdAt) : new Date(a.createdAt);
@@ -34,7 +33,6 @@ const Sidebar = () => {
     });
   }, [groups]);
 
-  // Sắp xếp Users: Người có tin nhắn mới nhất lên đầu
   const sortedUsers = useMemo(() => {
     let filtered = showOnlineOnly
       ? users.filter((user) => onlineUsers.includes(user._id))
@@ -56,7 +54,7 @@ const Sidebar = () => {
     const content = item.lastMessage.image ? "📷 Hình ảnh" : item.lastMessage.text;
     
     return (
-      <span className="truncate block text-xs text-zinc-500">
+      <span className={`truncate block text-xs ${unreadCounts[item._id] > 0 ? "text-primary font-bold" : "text-zinc-500"}`}>
         {prefix}{content}
       </span>
     );
@@ -112,7 +110,7 @@ const Sidebar = () => {
               key={group._id}
               onClick={() => setSelectedUser(group)}
               className={`
-                w-full p-3 flex items-center gap-3 hover:bg-base-300 transition-colors
+                w-full p-3 flex items-center gap-3 hover:bg-base-300 transition-colors relative
                 ${selectedUser?._id === group._id ? "bg-base-300 ring-1 ring-base-300" : ""}
               `}
             >
@@ -124,9 +122,17 @@ const Sidebar = () => {
                     <Hash className="size-6 text-primary" />
                   </div>
                 )}
+                {/* Badge đếm tin nhắn cho Nhóm */}
+                {unreadCounts[group._id] > 0 && (
+                  <span className="absolute -top-1 -right-1 size-5 bg-primary text-primary-content text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-base-100 animate-bounce">
+                    {unreadCounts[group._id] > 9 ? "9+" : unreadCounts[group._id]}
+                  </span>
+                )}
               </div>
               <div className="hidden lg:block text-left min-w-0 flex-1">
-                <div className="font-medium truncate">{group.name}</div>
+                <div className={`font-medium truncate ${unreadCounts[group._id] > 0 ? "text-primary" : ""}`}>
+                  {group.name}
+                </div>
                 <div className="truncate">
                   {renderLastMessage(group)}
                 </div>
@@ -144,7 +150,7 @@ const Sidebar = () => {
               key={user._id}
               onClick={() => setSelectedUser(user)}
               className={`
-                w-full p-3 flex items-center gap-3 hover:bg-base-300 transition-colors
+                w-full p-3 flex items-center gap-3 hover:bg-base-300 transition-colors relative
                 ${selectedUser?._id === user._id ? "bg-base-300 ring-1 ring-base-300" : ""}
               `}
             >
@@ -157,10 +163,18 @@ const Sidebar = () => {
                 {onlineUsers.includes(user._id) && (
                   <span className="absolute bottom-0 right-0 size-3 bg-green-500 rounded-full ring-2 ring-base-100" />
                 )}
+                {/* Badge đếm tin nhắn cho Cá nhân */}
+                {unreadCounts[user._id] > 0 && (
+                  <span className="absolute -top-1 -right-1 size-5 bg-primary text-primary-content text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-base-100 animate-bounce">
+                    {unreadCounts[user._id] > 9 ? "9+" : unreadCounts[user._id]}
+                  </span>
+                )}
               </div>
 
               <div className="hidden lg:block text-left min-w-0 flex-1">
-                <div className="font-medium truncate">{user.fullName}</div>
+                <div className={`font-medium truncate ${unreadCounts[user._id] > 0 ? "text-primary" : ""}`}>
+                  {user.fullName}
+                </div>
                 <div className="truncate">
                    {renderLastMessage(user)}
                 </div>

@@ -3,11 +3,27 @@ import toast from "react-hot-toast";
 import { axiosInstance } from "../lib/axios";
 import { useAuthStore } from "./useAuthStore";
 
+// --- Logic LocalStorage để giữ số đếm khi F5 ---
+const getStoredUnreadCounts = () => {
+  try {
+    const stored = localStorage.getItem("unreadCounts");
+    return stored ? JSON.parse(stored) : {};
+  } catch (error) {
+    return {};
+  }
+};
+
+const setStoredUnreadCounts = (counts) => {
+  localStorage.setItem("unreadCounts", JSON.stringify(counts));
+};
+
 export const useChatStore = create((set, get) => ({
   messages: [],
   users: [],
   groups: [],
   selectedUser: null,
+  // Khởi tạo từ ổ cứng thay vì object rỗng
+  unreadCounts: getStoredUnreadCounts(), 
   isUsersLoading: false,
   isMessagesLoading: false,
   isGroupsLoading: false,
@@ -48,6 +64,8 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.get(`/messages/${chatId}`);
       set({ messages: res.data });
+      // Đánh dấu đã đọc khi mở chat
+      get().markAsRead(chatId);
     } catch (error) {
       toast.error(error.response?.data?.message || "Lỗi tải tin nhắn");
     } finally {
@@ -61,10 +79,8 @@ export const useChatStore = create((set, get) => ({
       const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
       const newMessage = res.data;
 
-      // Cập nhật khung chat ngay lập tức cho người gửi
       set({ messages: [...messages, newMessage] });
 
-      // Cập nhật Sidebar cho người gửi (đưa lên đầu)
       if (newMessage.groupId) {
         const updatedGroups = groups.map(g => 
           g._id === newMessage.groupId ? { ...g, lastMessage: newMessage } : g
@@ -101,33 +117,42 @@ export const useChatStore = create((set, get) => ({
     });
 
     socket.on("newMessage", (newMessage) => {
-      const { selectedUser, users, groups, messages } = get();
+      const { selectedUser, users, groups, messages, unreadCounts } = get();
       const authUser = useAuthStore.getState().authUser;
       if (!authUser) return;
 
-      // Ép kiểu ID về String để so sánh chính xác (tránh lỗi Object ID từ populate)
       const currentChatId = selectedUser?._id?.toString();
       const msgGroupId = newMessage.groupId?.toString();
       const msgSenderId = (newMessage.senderId._id || newMessage.senderId).toString();
       const msgReceiverId = newMessage.receiverId?.toString();
+      
+      const chatIdOfIncomingMsg = msgGroupId || msgSenderId;
 
-      // 1. Cập nhật khung chat nếu đang mở đúng cuộc trò chuyện
       const isChatRelevant = msgGroupId 
         ? msgGroupId === currentChatId 
         : (msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId));
 
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
         set({ messages: [...messages, newMessage] });
+      } 
+      
+      // --- CẬP NHẬT ĐẾM TIN NHẮN (Đồng bộ LocalStorage) ---
+      if (msgSenderId !== authUser._id.toString() && chatIdOfIncomingMsg !== currentChatId) {
+        const newCounts = {
+          ...unreadCounts,
+          [chatIdOfIncomingMsg]: (unreadCounts[chatIdOfIncomingMsg] || 0) + 1,
+        };
+        set({ unreadCounts: newCounts });
+        setStoredUnreadCounts(newCounts); // Lưu vào localStorage
       }
 
-      // 2. Cập nhật Sidebar Realtime (Dành cho người nhận)
+      // Cập nhật Sidebar Realtime
       if (msgGroupId) {
         const updatedGroups = groups.map((g) => 
           g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g
         ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
         set({ groups: [...updatedGroups] });
       } else {
-        // Xác định đối tác (Partner) để cập nhật đúng dòng trên Sidebar
         const partnerId = msgSenderId === authUser._id.toString() ? msgReceiverId : msgSenderId;
         const updatedUsers = users.map((u) => 
           u._id.toString() === partnerId ? { ...u, lastMessage: newMessage } : u
@@ -135,6 +160,15 @@ export const useChatStore = create((set, get) => ({
         set({ users: [...updatedUsers] });
       }
     });
+  },
+
+  markAsRead: (chatId) => {
+    const { unreadCounts } = get();
+    if (unreadCounts[chatId]) {
+      const newCounts = { ...unreadCounts, [chatId]: 0 };
+      set({ unreadCounts: newCounts });
+      setStoredUnreadCounts(newCounts); // Cập nhật lại localStorage
+    }
   },
 
   subscribeToMessages: () => {
@@ -193,5 +227,10 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  setSelectedUser: (selectedUser) => set({ selectedUser }),
+  setSelectedUser: (selectedUser) => {
+    set({ selectedUser });
+    if (selectedUser) {
+      get().markAsRead(selectedUser._id);
+    }
+  },
 }));

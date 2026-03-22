@@ -6,7 +6,7 @@ import { formatMessageTime } from "../lib/utils";
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import MessageSkeleton from "./skeletons/MessageSkeleton";
-import { Trash2, Video, PhoneMissed, Mic, Phone } from "lucide-react"; 
+import { Trash2, Video, PhoneMissed, Mic, Phone, FileText, Download } from "lucide-react"; 
 
 const ChatContainer = () => {
   const {
@@ -67,12 +67,13 @@ const ChatContainer = () => {
           // LOGIC NHẬN DIỆN LOẠI TIN NHẮN
           const isVideoCall = message.callType === "video" || message.messageType === "video_call";
           const isVoice = message.messageType === "voice";
+          const isFile = message.messageType === "file" || !!message.fileUrl;
           
-          // Kiểm tra cuộc gọi nhỡ (duration 00:00 hoặc status missed)
+          // Kiểm tra cuộc gọi nhỡ
           const isMissed = message.duration === "00:00" || message.callDetails?.status === "missed";
           
-          // Nhận diện log cuộc gọi (Từ Backend mới hoặc cấu trúc cũ)
-          const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call";
+          // Nhận diện log cuộc gọi
+          const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call" || message.messageType === "video_call";
 
           return (
             <div
@@ -98,7 +99,8 @@ const ChatContainer = () => {
               </div>
 
               <div className={`chat-bubble flex flex-col relative group max-w-[85%] 
-                ${isCallLog ? "bg-base-200 text-base-content border border-base-300 shadow-sm" : ""}`}
+                ${isCallLog ? "bg-base-200 text-base-content border border-base-300 shadow-sm" : ""}
+                ${isFile ? "bg-base-200 text-base-content border border-base-300" : ""}`}
               >
                 {isMyMessage && (
                   <button
@@ -131,13 +133,40 @@ const ChatContainer = () => {
                         {isMissed ? "Cuộc gọi nhỡ" : isVideoCall ? "Cuộc gọi video" : "Cuộc gọi thoại"}
                       </span>
                       <span className="text-[11px] font-medium opacity-70">
-                        {/* Ưu tiên hiển thị duration từ field riêng, nếu không có mới dùng text format sẵn */}
                         {message.duration ? `Thời lượng: ${message.duration}` : message.text}
                       </span>
                     </div>
                   </div>
+                ) : isFile ? (
+                  /* 2. HIỂN THỊ TIN NHẮN TỆP TIN (FILE) */
+                  <div className="flex flex-col gap-2 p-1">
+                    <div className="flex items-center gap-3 bg-base-300/50 p-3 rounded-lg border border-base-content/5 hover:bg-base-300 transition-colors">
+                      <div className="p-2 bg-primary/10 text-primary rounded-lg">
+                        <FileText size={24} />
+                      </div>
+                      <div className="flex flex-col overflow-hidden flex-1">
+                        <span className="text-sm font-bold truncate max-w-[120px] sm:max-w-[200px]">
+                          {message.fileName || "Tài liệu tập tin"}
+                        </span>
+                        <span className="text-[10px] opacity-60">
+                          {message.fileSize ? `${(message.fileSize / 1024).toFixed(1)} KB` : "Document"}
+                        </span>
+                      </div>
+                      <a 
+                        href={message.fileUrl} 
+                        download={message.fileName}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-2 hover:bg-primary/20 text-primary rounded-full transition-all"
+                        title="Tải về"
+                      >
+                        <Download size={18} />
+                      </a>
+                    </div>
+                    {message.text && <p className="text-sm px-1">{message.text}</p>}
+                  </div>
                 ) : isVoice ? (
-                  /* 2. HIỂN THỊ TIN NHẮN GIỌNG NÓI */
+                  /* 3. HIỂN THỊ TIN NHẮN GIỌNG NÓI */
                   <div className="flex flex-col gap-2 p-1">
                     <div className="flex items-center gap-2 text-primary-content/80">
                       <Mic size={14} />
@@ -151,7 +180,7 @@ const ChatContainer = () => {
                     {message.text && <p className="text-sm mt-1">{message.text}</p>}
                   </div>
                 ) : (
-                  /* 3. HIỂN THỊ TIN NHẮN VĂN BẢN / HÌNH ẢNH */
+                  /* 4. HIỂN THỊ TIN NHẮN VĂN BẢN / HÌNH ẢNH */
                   <>
                     {message.image && (
                       <img

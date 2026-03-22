@@ -1,44 +1,77 @@
 import { useRef, useState } from "react";
 import { useChatStore } from "../store/useChatStore";
-import { Image, Send, X, Mic, Square } from "lucide-react";
+import { Image, Send, X, Mic, Square, Paperclip, FileText } from "lucide-react";
 import toast from "react-hot-toast";
 
 const MessageInput = () => {
   const [text, setText] = useState("");
   const [imagePreview, setImagePreview] = useState(null);
+  const [filePreview, setFilePreview] = useState(null); // Trạng thái cho File
   const [isRecording, setIsRecording] = useState(false);
   const [audioPreview, setAudioPreview] = useState(null);
   
-  const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const fileInputRef = useRef(null); // Ref cho input file
   const mediaRecorderRef = useRef(null);
-  const streamRef = useRef(null); // Thêm ref để quản lý stream bền vững hơn
+  const streamRef = useRef(null);
 
   const { sendMessage, selectedUser } = useChatStore();
 
+  // --- XỬ LÝ HÌNH ẢNH ---
   const handleImageChange = (e) => {
     const file = e.target.files[0];
+    if (!file) return;
     if (!file.type.startsWith("image/")) {
       toast.error("Please select an image file");
       return;
     }
     const reader = new FileReader();
-    reader.onloadend = () => setImagePreview(reader.result);
+    reader.onloadend = () => {
+      setImagePreview(reader.result);
+      setFilePreview(null); // Tắt preview file nếu chọn ảnh
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // --- XỬ LÝ FILE (PDF, DOCX, ZIP, v.v.) ---
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Giới hạn dung lượng file (VD: 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File is too large. Maximum size is 10MB");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setFilePreview({
+        name: file.name,
+        size: file.size,
+        base64: reader.result,
+      });
+      setImagePreview(null); // Tắt preview ảnh nếu chọn file
+    };
     reader.readAsDataURL(file);
   };
 
   const removeImage = () => {
     setImagePreview(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
+  const removeFile = () => {
+    setFilePreview(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // --- LOGIC XỬ LÝ VOICE (ĐÃ SỬA LỖI) ---
+  // --- LOGIC XỬ LÝ VOICE ---
   const startRecording = async () => {
     try {
-      // 1. Luôn clear preview cũ trước khi thu mới
       setAudioPreview(null);
-
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream; // Lưu stream vào ref để stop sau này
+      streamRef.current = stream;
       
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -56,7 +89,6 @@ const MessageInput = () => {
           setAudioPreview(reader.result);
         };
         
-        // 2. Quan trọng: Dừng tất cả các track ngay khi ngừng ghi
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
           streamRef.current = null;
@@ -80,13 +112,16 @@ const MessageInput = () => {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!text.trim() && !imagePreview && !audioPreview) return;
+    if (!text.trim() && !imagePreview && !audioPreview && !filePreview) return;
 
     try {
       const messagePayload = {
         text: text.trim(),
         image: imagePreview,
         audio: audioPreview,
+        file: filePreview?.base64, // Gửi dữ liệu file
+        fileName: filePreview?.name, // Gửi tên file
+        fileSize: filePreview?.size,
       };
 
       if (selectedUser?.members) {
@@ -95,10 +130,12 @@ const MessageInput = () => {
 
       await sendMessage(messagePayload);
 
-      // 3. Clear toàn bộ trạng thái sau khi gửi thành công
+      // Reset trạng thái
       setText("");
       setImagePreview(null);
-      setAudioPreview(null); // Đảm bảo reset audioPreview về null
+      setAudioPreview(null);
+      setFilePreview(null);
+      if (imageInputRef.current) imageInputRef.current.value = "";
       if (fileInputRef.current) fileInputRef.current.value = "";
       
     } catch (error) {
@@ -109,6 +146,7 @@ const MessageInput = () => {
 
   return (
     <div className="p-4 w-full">
+      {/* Image Preview */}
       {imagePreview && (
         <div className="mb-3 flex items-center gap-2">
           <div className="relative">
@@ -125,6 +163,24 @@ const MessageInput = () => {
               <X className="size-3" />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* File Preview */}
+      {filePreview && (
+        <div className="mb-3 flex items-center gap-2 bg-base-200 p-2 rounded-lg w-fit border border-primary/20">
+          <FileText className="size-5 text-primary" />
+          <div className="flex flex-col">
+            <span className="text-xs font-medium truncate max-w-[150px]">{filePreview.name}</span>
+            <span className="text-[10px] opacity-50">{(filePreview.size / 1024).toFixed(1)} KB</span>
+          </div>
+          <button 
+            type="button" 
+            onClick={removeFile} 
+            className="text-error hover:bg-error/10 rounded-full p-0.5 ml-1"
+          >
+            <X className="size-4" />
+          </button>
         </div>
       )}
 
@@ -153,23 +209,45 @@ const MessageInput = () => {
             onChange={(e) => setText(e.target.value)}
             disabled={isRecording}
           />
+          
+          {/* Input Ẩn cho Ảnh */}
           <input
             type="file"
             accept="image/*"
             className="hidden"
-            ref={fileInputRef}
+            ref={imageInputRef}
             onChange={handleImageChange}
           />
 
+          {/* Input Ẩn cho File */}
+          <input
+            type="file"
+            className="hidden"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+          />
+
+          {/* Nút Chọn Ảnh */}
           <button
             type="button"
             className={`hidden sm:flex btn btn-circle btn-sm sm:btn-md ${imagePreview ? "text-emerald-500" : "text-zinc-400"}`}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => imageInputRef.current?.click()}
             disabled={isRecording}
           >
             <Image size={20} />
           </button>
 
+          {/* Nút Chọn File */}
+          <button
+            type="button"
+            className={`hidden sm:flex btn btn-circle btn-sm sm:btn-md ${filePreview ? "text-primary" : "text-zinc-400"}`}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isRecording}
+          >
+            <Paperclip size={20} />
+          </button>
+
+          {/* Nút Voice */}
           <button
             type="button"
             className={`btn btn-circle btn-sm sm:btn-md ${isRecording ? "btn-error animate-pulse text-white" : "text-zinc-400"}`}
@@ -182,7 +260,7 @@ const MessageInput = () => {
         <button
           type="submit"
           className="btn btn-sm sm:btn-md btn-circle btn-primary"
-          disabled={!text.trim() && !imagePreview && !audioPreview}
+          disabled={!text.trim() && !imagePreview && !audioPreview && !filePreview}
         >
           <Send size={22} />
         </button>

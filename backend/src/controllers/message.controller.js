@@ -63,10 +63,10 @@ export const getMessages = async (req, res) => {
   }
 };
 
-// Gửi tin nhắn (Cập nhật để hỗ trợ Audio)
+// Gửi tin nhắn (Cập nhật hỗ trợ: Image, Audio, và FILE TÀI LIỆU)
 export const sendMessage = async (req, res) => {
   try {
-    const { text, image, audio } = req.body;
+    const { text, image, audio, file, fileName, fileSize } = req.body;
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
@@ -85,6 +85,16 @@ export const sendMessage = async (req, res) => {
       audioUrl = uploadResponse.secure_url;
     }
 
+    // XỬ LÝ UPLOAD FILE (PDF, Docx, Zip...)
+    let fileUrl;
+    if (file) {
+      const uploadResponse = await cloudinary.uploader.upload(file, {
+        resource_type: "auto", // Quan trọng: auto để nhận diện mọi loại file
+        folder: "chat_files",
+      });
+      fileUrl = uploadResponse.secure_url;
+    }
+
     const isGroup = await Group.exists({ _id: receiverOrGroupId });
 
     const newMessageData = {
@@ -92,7 +102,10 @@ export const sendMessage = async (req, res) => {
       text,
       image: imageUrl,
       audio: audioUrl,
-      messageType: audio ? "voice" : image ? "image" : "text",
+      fileUrl: fileUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      messageType: fileUrl ? "file" : audio ? "voice" : image ? "image" : "text",
     };
 
     if (isGroup) {
@@ -132,13 +145,20 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    // Xóa ảnh trên Cloudinary
     if (message.image) {
       const publicId = message.image.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId);
     }
+    // Xóa audio trên Cloudinary
     if (message.audio) {
       const publicId = message.audio.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
+    }
+    // Xóa file tài liệu trên Cloudinary
+    if (message.fileUrl) {
+      const publicId = "chat_files/" + message.fileUrl.split("/").pop().split(".")[0];
+      await cloudinary.uploader.destroy(publicId, { resource_type: "raw" }); 
     }
 
     await Message.findByIdAndDelete(messageId);
@@ -186,7 +206,6 @@ export const clearChat = async (req, res) => {
 
 /**
  * HÀM BỔ SUNG: Lưu thông báo kết thúc cuộc gọi
- * Hỗ trợ lưu trường duration và gửi qua socket realtime
  */
 export const saveCallNotification = async (req, res) => {
   try {
@@ -194,7 +213,6 @@ export const saveCallNotification = async (req, res) => {
     const { duration, callType } = req.body;
     const senderId = req.user._id;
 
-    // Logic xác định text: Nếu duration là 00:00 và người nhận là người nghe => Cuộc gọi nhỡ
     const isMissedCall = duration === "00:00";
     const callText = isMissedCall 
       ? `Cuộc gọi ${callType === "video" ? "video" : "thoại"} nhỡ`
@@ -204,14 +222,13 @@ export const saveCallNotification = async (req, res) => {
       senderId,
       receiverId,
       text: callText,
-      duration: duration || "00:00", // Lưu vào DB (Đảm bảo model có trường này)
-      callType: callType || "video", // Lưu vào DB (Đảm bảo model có trường này)
-      messageType: "text", // Để mặc định là text để UI hiển thị đơn giản
+      duration: duration || "00:00",
+      callType: callType || "video",
+      messageType: "call", // Đổi sang "call" cho đồng bộ Model enum
     });
 
     await newMessage.save();
 
-    // SOCKET REALTIME cho người nhận
     const receiverSocketId = getReceiverSocketId(receiverId);
     if (receiverSocketId) {
       io.to(receiverSocketId).emit("newMessage", newMessage);

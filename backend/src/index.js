@@ -15,7 +15,7 @@ dotenv.config();
 
 const PORT = process.env.PORT || 5001;
 
-// --- GIẢI QUYẾT ĐƯỜNG DẪN (Đã tối ưu cho cấu trúc của bạn) ---
+// 1. XÁC ĐỊNH ĐƯỜNG DẪN (Rất quan trọng cho Deploy)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -32,31 +32,28 @@ app.use(
   })
 );
 
-// Các API Routes
+// 2. CÁC ROUTE API
 app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/groups", groupRoutes);
 
-// --- CẤU HÌNH PHỤC VỤ FRONTEND (DEPLOY) ---
+// 3. CẤU HÌNH PHỤC VỤ GIAO DIỆN (FIX LỖI CANNOT GET)
 if (process.env.NODE_ENV === "production") {
-  // Đi từ backend/src ra ngoài 2 cấp để tới thư mục gốc dự án
-  const rootPath = path.resolve(__dirname, "../../");
-  const frontendPath = path.join(rootPath, "frontend", "dist");
+  // Đi từ backend/src ra ngoài 2 cấp để tới thư mục gốc dự án, rồi vào frontend/dist
+  const frontendPath = path.resolve(__dirname, "../../frontend/dist");
 
-  // In ra Log để kiểm tra trên Render (Cực kỳ quan trọng để debug)
-  console.log("Checking Frontend Path:", frontendPath);
+  // Log này giúp bạn kiểm tra đường dẫn trong tab Logs của Render
+  console.log("Serving static files from:", frontendPath);
 
-  // Phục vụ các file tĩnh trong thư mục dist
   app.use(express.static(frontendPath));
 
-  // Trả về index.html cho mọi request không phải API
   app.get("*", (req, res) => {
     res.sendFile(path.join(frontendPath, "index.html"));
   });
 }
 
+// 4. KHỞI CHẠY SERVER
 server.listen(PORT, () => {
   console.log(`Server is running on PORT: ${PORT}`);
-  console.log(`Working Directory: ${process.cwd()}`);
   connectDB();
 });

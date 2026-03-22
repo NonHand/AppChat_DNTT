@@ -15,7 +15,7 @@ dotenv.config();
 
 const PORT = process.env.PORT || 5001;
 
-// Giải quyết vấn đề __dirname trong ES Modules (Quan trọng cho Deploy)
+// --- GIẢI QUYẾT ĐƯỜNG DẪN (Đã tối ưu cho cấu trúc của bạn) ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -32,20 +32,24 @@ app.use(
   })
 );
 
+// Các API Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/groups", groupRoutes);
 
-// --- CẤU HÌNH DEPLOY CHUẨN CHO CẤU TRÚC CỦA BẠN ---
+// --- CẤU HÌNH PHỤC VỤ FRONTEND (DEPLOY) ---
 if (process.env.NODE_ENV === "production") {
-  // Vì index.js nằm trong backend/src, ta cần đi ra 2 cấp để về Root, rồi vào frontend/dist
-  const frontendPath = path.resolve(__dirname, "../../frontend/dist");
+  // Đi từ backend/src ra ngoài 2 cấp để tới thư mục gốc dự án
+  const rootPath = path.resolve(__dirname, "../../");
+  const frontendPath = path.join(rootPath, "frontend", "dist");
 
-  // Log này sẽ hiện trong tab Logs của Render để bạn kiểm tra nếu vẫn lỗi
-  console.log("Static files path:", frontendPath);
+  // In ra Log để kiểm tra trên Render (Cực kỳ quan trọng để debug)
+  console.log("Checking Frontend Path:", frontendPath);
 
+  // Phục vụ các file tĩnh trong thư mục dist
   app.use(express.static(frontendPath));
 
+  // Trả về index.html cho mọi request không phải API
   app.get("*", (req, res) => {
     res.sendFile(path.join(frontendPath, "index.html"));
   });
@@ -53,5 +57,6 @@ if (process.env.NODE_ENV === "production") {
 
 server.listen(PORT, () => {
   console.log(`Server is running on PORT: ${PORT}`);
+  console.log(`Working Directory: ${process.cwd()}`);
   connectDB();
 });

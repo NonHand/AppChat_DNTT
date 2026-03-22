@@ -20,30 +20,53 @@ export const useCallStore = create((set, get) => ({
   peerConnection: null,
   startTime: null,           
 
+  // --- HÀM THIẾT LẬP LẮNG NGHE ICE CANDIDATE (QUAN TRỌNG) ---
+  setupIceCandidateListener: () => {
+    const { socket } = useAuthStore.getState();
+    
+    // Xóa listener cũ để tránh trùng lặp
+    socket.off("ice-candidate");
+
+    socket.on("ice-candidate", async ({ candidate }) => {
+      const { peerConnection } = get();
+      if (peerConnection && candidate) {
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+          console.log("✅ Đã nạp thành công ICE Candidate từ đối phương");
+        } catch (error) {
+          console.error("❌ Lỗi khi nạp ICE Candidate:", error);
+        }
+      }
+    });
+  },
+
   // --- HÀM KHỞI TẠO CUỘC GỌI (Người gọi) ---
   initiateCall: async (selectedUser) => {
     const { socket, authUser } = useAuthStore.getState();
+    get().setupIceCandidateListener(); // Bắt đầu lắng nghe ICE ngay khi gọi
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       set({ isCalling: true, remoteUser: selectedUser, myStream: stream });
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" }
+        ]
       });
 
-      // Gửi các ứng viên mạng (ICE) cho đối phương
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit("ice-candidate", { to: selectedUser._id, candidate: event.candidate });
         }
       };
 
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
       pc.ontrack = (event) => {
         set({ userStream: event.streams[0] });
       };
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -51,7 +74,7 @@ export const useCallStore = create((set, get) => ({
       socket.emit("callUser", {
         userToCall: selectedUser._id,
         signalData: offer,
-        from: socket.id, // socketId hiện tại
+        from: authUser._id, // Dùng ID thay vì socket.id để Backend dễ xử lý
         name: authUser.fullName 
       });
 
@@ -64,8 +87,9 @@ export const useCallStore = create((set, get) => ({
 
   // --- HÀM NHẬN CUỘC GỌI (Người nhận) ---
   answerCall: async () => {
-    const { socket } = useAuthStore.getState();
+    const { socket, authUser } = useAuthStore.getState();
     const { caller } = get();
+    get().setupIceCandidateListener(); // Bắt đầu lắng nghe ICE ngay khi nhận
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -77,20 +101,24 @@ export const useCallStore = create((set, get) => ({
       });
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" }
+        ]
       });
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          // Gửi về phía người gọi (caller.from)
           socket.emit("ice-candidate", { to: caller.from, candidate: event.candidate });
         }
       };
 
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
       pc.ontrack = (event) => {
         set({ userStream: event.streams[0] });
       };
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       await pc.setRemoteDescription(new RTCSessionDescription(caller.signal));
       const answer = await pc.createAnswer();
@@ -118,15 +146,9 @@ export const useCallStore = create((set, get) => ({
       peerConnection.close();
     }
 
-    // Xác định ID người nhận để Backend lưu Database chính xác
-    // Nếu mình là người gọi: lấy remoteUser._id. Nếu mình là người nhận: lấy caller.userId
-    const targetId = remoteUser?._id || caller?.userId || caller?.from;
-
-    socket.emit("endCall", { 
-      to: targetId, 
-      duration: duration,
-      senderId: authUser._id 
-    });
+    const targetId = remoteUser?._id || caller?.from;
+    socket.emit("endCall", { to: targetId });
+    socket.off("ice-candidate"); // Tắt lắng nghe khi kết thúc
 
     set({
       isCalling: false,
@@ -146,8 +168,12 @@ export const useCallStore = create((set, get) => ({
   handleCallAccepted: async (signal) => {
     const { peerConnection } = get();
     if (peerConnection) {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
-      set({ callAccepted: true, startTime: Date.now() });
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+        set({ callAccepted: true, startTime: Date.now() });
+      } catch (error) {
+        console.error("❌ Lỗi setRemoteDescription:", error);
+      }
     }
   }
 }));

@@ -6,10 +6,12 @@ import Message from "../models/message.model.js";
 const app = express();
 const server = http.createServer(app);
 
-// Khởi tạo Socket.io với cấu hình CORS
+// Khởi tạo Socket.io với cấu hình CORS linh hoạt cho Production
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173"],
+    origin: process.env.NODE_ENV === "production" 
+      ? [process.env.CLIENT_URL] 
+      : ["http://localhost:5173"],
   },
 });
 
@@ -17,7 +19,7 @@ const io = new Server(server, {
 const userSocketMap = {}; 
 
 /**
- * Lấy socketId của một user cụ thể
+ * Lấy socketId của một user cụ thể từ UserId (MongoDB _id)
  */
 export function getReceiverSocketId(userId) {
   return userSocketMap[userId];
@@ -42,11 +44,10 @@ io.on("connection", (socket) => {
   socket.on("callUser", ({ userToCall, signalData, from, name }) => {
     const receiverSocketId = getReceiverSocketId(userToCall);
     if (receiverSocketId) {
-      console.log(`Call from ${name} to ${userToCall}`);
+      console.log(`📞 Call from ${name} (${from}) to ${userToCall}`);
       io.to(receiverSocketId).emit("incomingCall", { 
         signal: signalData, 
-        from, // Đây là socketId của người gọi
-        userId: userId, // Đây là MongoDB _id của người gọi
+        from: from, // Đây là User ID của người gọi (authUser._id)
         name 
       });
     }
@@ -54,27 +55,28 @@ io.on("connection", (socket) => {
 
   // 2. Trả lời cuộc gọi
   socket.on("answerCall", (data) => {
-    const callerSocketId = getReceiverSocketId(data.to);
+    // Tìm socketId của người gọi dựa trên User ID (data.to)
+    const callerSocketId = getReceiverSocketId(data.to) || data.to; 
     if (callerSocketId) {
       io.to(callerSocketId).emit("callAccepted", data.signal);
     }
   });
 
-  // 3. Trao đổi thông tin mạng (ICE Candidates)
+  // 3. Trao đổi thông tin mạng (ICE Candidates) - ĐÃ FIX LỖI KẾT NỐI
   socket.on("ice-candidate", (data) => {
-    const targetSocketId = getReceiverSocketId(data.to);
+    // Kiểm tra xem data.to là UserId hay là SocketId trực tiếp
+    const targetSocketId = userSocketMap[data.to] || data.to;
+    
     if (targetSocketId) {
-      io.to(targetSocketId).emit("ice-candidate", data.candidate);
+      // Gửi candidate cho đối phương
+      io.to(targetSocketId).emit("ice-candidate", { candidate: data.candidate });
     }
   });
 
   // 4. Kết thúc và LƯU LỊCH SỬ CUỘC GỌI
   socket.on("endCall", async ({ to, duration, senderId }) => {
-    // 'to' ở đây có thể là userId (MongoDB _id) hoặc socketId tùy theo FE gửi lên
-    // Để an toàn, chúng ta tìm socketId từ userId nếu cần
     const targetSocketId = userSocketMap[to] || to;
     
-    // Thông báo cho bên kia cúp máy
     if (targetSocketId) {
       io.to(targetSocketId).emit("endCall");
     }
@@ -82,9 +84,18 @@ io.on("connection", (socket) => {
     // Lưu vào Database lịch sử cuộc gọi
     try {
       if (senderId && to) {
+        // 'to' có thể là socketId, nếu vậy hãy tìm UserId tương ứng
+        let receiverId = to;
+        for (const [id, sId] of Object.entries(userSocketMap)) {
+          if (sId === to) {
+            receiverId = id;
+            break;
+          }
+        }
+
         const callMessage = new Message({
           senderId: senderId,
-          receiverId: to,
+          receiverId: receiverId,
           messageType: "video_call",
           text: duration > 0 ? "Cuộc gọi video" : "Cuộc gọi nhỡ",
           callDetails: {
@@ -95,12 +106,11 @@ io.on("connection", (socket) => {
 
         await callMessage.save();
 
-        // Phát tín hiệu tin nhắn mới để FE cập nhật khung chat ngay lập tức
-        const receiverIdInMap = getReceiverSocketId(to);
-        const senderIdInMap = getReceiverSocketId(senderId);
+        const receiverSocketId = getReceiverSocketId(receiverId);
+        const senderSocketId = getReceiverSocketId(senderId);
 
-        if (receiverIdInMap) io.to(receiverIdInMap).emit("newMessage", callMessage);
-        if (senderIdInMap) io.to(senderIdInMap).emit("newMessage", callMessage);
+        if (receiverSocketId) io.to(receiverSocketId).emit("newMessage", callMessage);
+        if (senderSocketId) io.to(senderSocketId).emit("newMessage", callMessage);
       }
     } catch (error) {
       console.error("Lỗi khi lưu lịch sử cuộc gọi:", error);
@@ -110,7 +120,6 @@ io.on("connection", (socket) => {
   // ==========================================
   // LOGIC CHAT NHÓM
   // ==========================================
-
   socket.on("joinGroup", (groupId) => {
     socket.join(groupId);
   });

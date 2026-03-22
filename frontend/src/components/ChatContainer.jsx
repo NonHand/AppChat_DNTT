@@ -6,7 +6,7 @@ import { formatMessageTime } from "../lib/utils";
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import MessageSkeleton from "./skeletons/MessageSkeleton";
-import { Trash2, Video, PhoneMissed, Mic } from "lucide-react"; // Thêm icon Mic
+import { Trash2, Video, PhoneMissed, Mic, Phone } from "lucide-react"; 
 
 const ChatContainer = () => {
   const {
@@ -49,6 +49,7 @@ const ChatContainer = () => {
 
   const formatDuration = (seconds) => {
     if (!seconds) return "0:00";
+    if (typeof seconds === "string") return seconds; 
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, "0")}`;
@@ -63,9 +64,15 @@ const ChatContainer = () => {
           const isMyMessage = message.senderId === authUser._id || message.senderId?._id === authUser._id;
           const senderInfo = isMyMessage ? authUser : message.senderId;
 
-          const isVideoCall = message.messageType === "video_call";
-          const isVoice = message.messageType === "voice"; // Kiểm tra tin nhắn thoại
-          const isMissed = message.callDetails?.status === "missed";
+          // LOGIC NHẬN DIỆN LOẠI TIN NHẮN
+          const isVideoCall = message.callType === "video" || message.messageType === "video_call";
+          const isVoice = message.messageType === "voice";
+          
+          // Kiểm tra cuộc gọi nhỡ (duration 00:00 hoặc status missed)
+          const isMissed = message.duration === "00:00" || message.callDetails?.status === "missed";
+          
+          // Nhận diện log cuộc gọi (Từ Backend mới hoặc cấu trúc cũ)
+          const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call";
 
           return (
             <div
@@ -91,7 +98,7 @@ const ChatContainer = () => {
               </div>
 
               <div className={`chat-bubble flex flex-col relative group max-w-[85%] 
-                ${isVideoCall ? "bg-base-200 text-base-content border border-base-300 shadow-sm" : ""}`}
+                ${isCallLog ? "bg-base-200 text-base-content border border-base-300 shadow-sm" : ""}`}
               >
                 {isMyMessage && (
                   <button
@@ -107,25 +114,30 @@ const ChatContainer = () => {
                   </button>
                 )}
 
-                {/* HIỂN THỊ NỘI DUNG CUỘC GỌI VIDEO */}
-                {isVideoCall ? (
-                  <div className="flex items-center gap-3 py-1 px-2">
+                {/* 1. HIỂN THỊ TIN NHẮN CUỘC GỌI */}
+                {isCallLog ? (
+                  <div className="flex items-center gap-3 py-1 px-2 min-w-[160px]">
                     <div className={`p-2 rounded-full ${isMissed ? "bg-error/20 text-error" : "bg-primary/20 text-primary"}`}>
-                      {isMissed ? <PhoneMissed size={20} /> : <Video size={20} />}
+                      {isMissed ? (
+                        <PhoneMissed size={20} />
+                      ) : isVideoCall ? (
+                        <Video size={20} />
+                      ) : (
+                        <Phone size={20} />
+                      )}
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-sm font-semibold">
-                        {isMissed ? "Cuộc gọi nhỡ" : "Cuộc gọi video"}
+                      <span className="text-sm font-semibold whitespace-nowrap">
+                        {isMissed ? "Cuộc gọi nhỡ" : isVideoCall ? "Cuộc gọi video" : "Cuộc gọi thoại"}
                       </span>
-                      {!isMissed && (
-                        <span className="text-[11px] opacity-70">
-                          Thời lượng: {formatDuration(message.callDetails?.duration)}
-                        </span>
-                      )}
+                      <span className="text-[11px] font-medium opacity-70">
+                        {/* Ưu tiên hiển thị duration từ field riêng, nếu không có mới dùng text format sẵn */}
+                        {message.duration ? `Thời lượng: ${message.duration}` : message.text}
+                      </span>
                     </div>
                   </div>
                 ) : isVoice ? (
-                  /* HIỂN THỊ TIN NHẮN GIỌNG NÓI (VOICE MESSAGE) */
+                  /* 2. HIỂN THỊ TIN NHẮN GIỌNG NÓI */
                   <div className="flex flex-col gap-2 p-1">
                     <div className="flex items-center gap-2 text-primary-content/80">
                       <Mic size={14} />
@@ -139,7 +151,7 @@ const ChatContainer = () => {
                     {message.text && <p className="text-sm mt-1">{message.text}</p>}
                   </div>
                 ) : (
-                  /* HIỂN THỊ TIN NHẮN THÔNG THƯỜNG (TEXT/IMAGE) */
+                  /* 3. HIỂN THỊ TIN NHẮN VĂN BẢN / HÌNH ẢNH */
                   <>
                     {message.image && (
                       <img

@@ -66,7 +66,7 @@ export const getMessages = async (req, res) => {
 // Gửi tin nhắn (Cập nhật để hỗ trợ Audio)
 export const sendMessage = async (req, res) => {
   try {
-    const { text, image, audio } = req.body; // Nhận thêm trường audio từ body
+    const { text, image, audio } = req.body;
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
@@ -76,10 +76,8 @@ export const sendMessage = async (req, res) => {
       imageUrl = uploadResponse.secure_url;
     }
 
-    // XỬ LÝ AUDIO
     let audioUrl;
     if (audio) {
-      // Khi upload audio lên Cloudinary, bắt buộc phải có resource_type: "video"
       const uploadResponse = await cloudinary.uploader.upload(audio, {
         resource_type: "video",
         folder: "voice_messages",
@@ -93,8 +91,8 @@ export const sendMessage = async (req, res) => {
       senderId,
       text,
       image: imageUrl,
-      audio: audioUrl, // Lưu URL audio vào DB
-      messageType: audio ? "voice" : image ? "image" : "text", // Tự động định dạng loại tin nhắn
+      audio: audioUrl,
+      messageType: audio ? "voice" : image ? "image" : "text",
     };
 
     if (isGroup) {
@@ -134,14 +132,12 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Xoá file trên Cloudinary (Cả ảnh và audio)
     if (message.image) {
       const publicId = message.image.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId);
     }
     if (message.audio) {
       const publicId = message.audio.split("/").pop().split(".")[0];
-      // Đối với audio/video phải chỉ định resource_type khi xoá
       await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
     }
 
@@ -184,6 +180,46 @@ export const clearChat = async (req, res) => {
     res.status(200).json({ message: "Chat cleared" });
   } catch (error) {
     console.log("Error in clearChat: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+/**
+ * HÀM BỔ SUNG: Lưu thông báo kết thúc cuộc gọi
+ * Hỗ trợ lưu trường duration và gửi qua socket realtime
+ */
+export const saveCallNotification = async (req, res) => {
+  try {
+    const { id: receiverId } = req.params;
+    const { duration, callType } = req.body;
+    const senderId = req.user._id;
+
+    // Logic xác định text: Nếu duration là 00:00 và người nhận là người nghe => Cuộc gọi nhỡ
+    const isMissedCall = duration === "00:00";
+    const callText = isMissedCall 
+      ? `Cuộc gọi ${callType === "video" ? "video" : "thoại"} nhỡ`
+      : `Cuộc gọi ${callType === "video" ? "video" : "thoại"} kết thúc. Thời lượng: ${duration}`;
+
+    const newMessage = new Message({
+      senderId,
+      receiverId,
+      text: callText,
+      duration: duration || "00:00", // Lưu vào DB (Đảm bảo model có trường này)
+      callType: callType || "video", // Lưu vào DB (Đảm bảo model có trường này)
+      messageType: "text", // Để mặc định là text để UI hiển thị đơn giản
+    });
+
+    await newMessage.save();
+
+    // SOCKET REALTIME cho người nhận
+    const receiverSocketId = getReceiverSocketId(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("newMessage", newMessage);
+    }
+
+    res.status(201).json(newMessage);
+  } catch (error) {
+    console.error("Error in saveCallNotification: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };

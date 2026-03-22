@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useCallStore } from "../store/useCallStore";
+import { useChatStore } from "../store/useChatStore"; 
 import { Mic, MicOff, Video, VideoOff, PhoneOff } from "lucide-react";
 
 const VideoModal = () => {
@@ -13,27 +14,78 @@ const VideoModal = () => {
     caller 
   } = useCallStore();
 
+  const { saveCallLog } = useChatStore(); 
+
   const myVideo = useRef();
   const userVideo = useRef();
   
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCamOn, setIsCamOn] = useState(true);
+  
+  const [startTime, setStartTime] = useState(null);
 
-  // Hiển thị stream của mình khi có dữ liệu
+  // 1. Ghi lại thời điểm bắt đầu khi cuộc gọi thực sự được CHẤP NHẬN
+  useEffect(() => {
+    if (callAccepted && !startTime) {
+      setStartTime(Date.now());
+    }
+  }, [callAccepted, startTime]);
+
+  // Hiển thị stream của mình
   useEffect(() => {
     if (myStream && myVideo.current) {
       myVideo.current.srcObject = myStream;
     }
   }, [myStream]);
 
-  // Hiển thị stream của đối phương khi cuộc gọi được chấp nhận
+  // Hiển thị stream của đối phương
   useEffect(() => {
     if (callAccepted && userStream && userVideo.current) {
       userVideo.current.srcObject = userStream;
     }
   }, [callAccepted, userStream]);
 
-  // Hàm bật/tắt Mic
+  // Format miliseconds sang định dạng mm:ss
+  const formatDuration = (ms) => {
+    if (!ms || ms <= 0) return "00:00";
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  /**
+   * HÀM KẾT THÚC CUỘC GỌI
+   * Cập nhật: Đảm bảo lưu log và thời lượng xong mới đóng Modal
+   */
+  const handleEndCall = async () => {
+    const endTime = Date.now();
+    // Tính thời gian: nếu cuộc gọi chưa được chấp nhận (missed), duration = 0
+    const durationMs = (startTime && callAccepted) ? endTime - startTime : 0;
+    const durationStr = formatDuration(durationMs);
+    
+    // Xác định ID người nhận tin nhắn log
+    const targetId = isCalling ? remoteUser?._id : caller?.from;
+
+    if (targetId) {
+      try {
+        // Gửi thông báo kết thúc kèm thời lượng gọi
+        // await ở đây để đảm bảo Store kịp update trước khi component bị hủy (unmount)
+        await saveCallLog(targetId, {
+          duration: durationStr,
+          callType: "video",
+          // Bạn có thể thêm trạng thái nếu muốn (ví dụ: cuộc gọi nhỡ)
+          text: durationMs > 0 ? "Cuộc gọi video" : "Cuộc gọi nhỡ"
+        });
+      } catch (error) {
+        console.error("Lỗi gửi thông báo kết thúc cuộc gọi:", error);
+      }
+    }
+
+    // Cuối cùng mới ngắt kết nối WebRTC và đóng giao diện gọi
+    leaveCall();
+  };
+
   const toggleMic = () => {
     if (myStream) {
       myStream.getAudioTracks()[0].enabled = !isMicOn;
@@ -41,7 +93,6 @@ const VideoModal = () => {
     }
   };
 
-  // Hàm bật/tắt Camera
   const toggleCam = () => {
     if (myStream) {
       myStream.getVideoTracks()[0].enabled = !isCamOn;
@@ -53,10 +104,9 @@ const VideoModal = () => {
 
   return (
     <div className="fixed inset-0 z-[999] bg-slate-950 flex flex-col items-center justify-center p-4">
-      {/* Container Video */}
       <div className="relative w-full max-w-6xl aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl border border-white/10">
         
-        {/* Video đối phương (Toàn màn hình Modal) */}
+        {/* Màn hình đối phương */}
         <div className="w-full h-full flex items-center justify-center bg-slate-900">
           {callAccepted ? (
             <video
@@ -77,7 +127,7 @@ const VideoModal = () => {
           )}
         </div>
 
-        {/* Video của mình (Cửa sổ nhỏ - Picture in Picture) */}
+        {/* Màn hình của mình (PIP) */}
         <div className="absolute top-4 right-4 w-32 md:w-64 aspect-video bg-slate-800 rounded-lg overflow-hidden border-2 border-white/20 shadow-lg z-10">
           <video
             playsInline
@@ -91,36 +141,35 @@ const VideoModal = () => {
           </div>
         </div>
 
-        {/* Thanh điều khiển (Controls) */}
+        {/* Thanh công cụ */}
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-6 px-8 py-4 bg-white/10 backdrop-blur-md rounded-full border border-white/20">
-          {/* Nút Mic */}
           <button
             onClick={toggleMic}
             className={`p-4 rounded-full transition-all ${isMicOn ? "bg-white/10 text-white hover:bg-white/20" : "bg-error text-white"}`}
+            title={isMicOn ? "Tắt Mic" : "Bật Mic"}
           >
             {isMicOn ? <Mic size={24} /> : <MicOff size={24} />}
           </button>
 
-          {/* Nút Cúp máy */}
           <button
-            onClick={leaveCall}
+            onClick={handleEndCall}
             className="p-5 bg-error text-white rounded-full hover:scale-110 transition-transform shadow-lg shadow-error/50"
+            title="Kết thúc cuộc gọi"
           >
             <PhoneOff size={28} />
           </button>
 
-          {/* Nút Camera */}
           <button
             onClick={toggleCam}
             className={`p-4 rounded-full transition-all ${isCamOn ? "bg-white/10 text-white hover:bg-white/20" : "bg-error text-white"}`}
+            title={isCamOn ? "Tắt Camera" : "Bật Camera"}
           >
             {isCamOn ? <Video size={24} /> : <VideoOff size={24} />}
           </button>
         </div>
       </div>
 
-      {/* Thông tin người đang gọi phía dưới (Tùy chọn) */}
-      <p className="mt-6 text-slate-400 text-sm tracking-widest uppercase">
+      <p className="mt-6 text-slate-400 text-sm tracking-widest uppercase animate-pulse">
         WebRTC Secure Connection
       </p>
     </div>

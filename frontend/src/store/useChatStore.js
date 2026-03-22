@@ -22,7 +22,6 @@ export const useChatStore = create((set, get) => ({
   users: [],
   groups: [],
   selectedUser: null,
-  // Khởi tạo từ ổ cứng thay vì object rỗng
   unreadCounts: getStoredUnreadCounts(), 
   isUsersLoading: false,
   isMessagesLoading: false,
@@ -45,7 +44,6 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.get("/groups");
       set({ groups: res.data });
-      
       const socket = useAuthStore.getState().socket;
       if (socket) {
         res.data.forEach(group => {
@@ -64,7 +62,6 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.get(`/messages/${chatId}`);
       set({ messages: res.data });
-      // Đánh dấu đã đọc khi mở chat
       get().markAsRead(chatId);
     } catch (error) {
       toast.error(error.response?.data?.message || "Lỗi tải tin nhắn");
@@ -78,7 +75,6 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
       const newMessage = res.data;
-
       set({ messages: [...messages, newMessage] });
 
       if (newMessage.groupId) {
@@ -95,6 +91,41 @@ export const useChatStore = create((set, get) => ({
       return newMessage;
     } catch (error) {
       toast.error(error.response?.data?.message || "Lỗi khi gửi tin nhắn");
+    }
+  },
+
+  /**
+   * CẬP NHẬT: Lưu log cuộc gọi bao gồm thời lượng (duration)
+   */
+  saveCallLog: async (receiverId, callData) => {
+    const { messages, users, selectedUser } = get();
+    const authUser = useAuthStore.getState().authUser;
+
+    try {
+      // Gửi callData (chứa duration, callType) lên Backend
+      const res = await axiosInstance.post(`/messages/call-notification/${receiverId}`, callData);
+      
+      // Đảm bảo tin nhắn có đầy đủ thông tin sender để render đúng bên phải (isMyMessage)
+      const newMessage = {
+        ...res.data,
+        senderId: authUser._id, // Hoặc authUser tùy theo cấu trúc ChatContainer của bạn
+      };
+
+      // 1. Cập nhật mảng messages ngay lập tức cho người bấm tắt
+      if (selectedUser?._id === receiverId) {
+        set({ messages: [...messages, newMessage] });
+      }
+
+      // 2. Cập nhật Sidebar (tin nhắn cuối cùng và sắp xếp lại)
+      const updatedUsers = users.map(u => 
+        u._id === receiverId ? { ...u, lastMessage: newMessage } : u
+      ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
+      
+      set({ users: updatedUsers });
+
+      return newMessage;
+    } catch (error) {
+      console.error("Lỗi khi lưu log cuộc gọi:", error);
     }
   },
 
@@ -127,26 +158,27 @@ export const useChatStore = create((set, get) => ({
       const msgReceiverId = newMessage.receiverId?.toString();
       
       const chatIdOfIncomingMsg = msgGroupId || msgSenderId;
-
       const isChatRelevant = msgGroupId 
         ? msgGroupId === currentChatId 
         : (msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId));
 
+      // CHỐNG TRÙNG: Không push nếu mình là người gửi vì đã tự update qua saveCallLog/sendMessage
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
-        set({ messages: [...messages, newMessage] });
+        const isExisted = messages.some(m => m._id === newMessage._id);
+        if (!isExisted) {
+          set({ messages: [...messages, newMessage] });
+        }
       } 
       
-      // --- CẬP NHẬT ĐẾM TIN NHẮN (Đồng bộ LocalStorage) ---
       if (msgSenderId !== authUser._id.toString() && chatIdOfIncomingMsg !== currentChatId) {
         const newCounts = {
           ...unreadCounts,
           [chatIdOfIncomingMsg]: (unreadCounts[chatIdOfIncomingMsg] || 0) + 1,
         };
         set({ unreadCounts: newCounts });
-        setStoredUnreadCounts(newCounts); // Lưu vào localStorage
+        setStoredUnreadCounts(newCounts);
       }
 
-      // Cập nhật Sidebar Realtime
       if (msgGroupId) {
         const updatedGroups = groups.map((g) => 
           g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g
@@ -167,7 +199,7 @@ export const useChatStore = create((set, get) => ({
     if (unreadCounts[chatId]) {
       const newCounts = { ...unreadCounts, [chatId]: 0 };
       set({ unreadCounts: newCounts });
-      setStoredUnreadCounts(newCounts); // Cập nhật lại localStorage
+      setStoredUnreadCounts(newCounts);
     }
   },
 
@@ -176,6 +208,7 @@ export const useChatStore = create((set, get) => ({
     if (!selectedUser) return;
     const socket = useAuthStore.getState().socket;
     if (selectedUser.members) socket.emit("joinGroup", selectedUser._id);
+    get().subscribeToChatUpdates();
   },
 
   unsubscribeFromMessages: () => {
@@ -217,10 +250,7 @@ export const useChatStore = create((set, get) => ({
   leaveGroup: async (groupId) => {
     try {
       await axiosInstance.post(`/groups/leave/${groupId}`);
-      set({
-        groups: get().groups.filter((g) => g._id !== groupId),
-        selectedUser: null,
-      });
+      set({ groups: get().groups.filter((g) => g._id !== groupId), selectedUser: null });
       toast.success("Đã rời khỏi nhóm");
     } catch (error) {
       toast.error(error.response?.data?.message || "Lỗi khi rời nhóm");

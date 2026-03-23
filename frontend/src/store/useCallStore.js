@@ -1,40 +1,34 @@
 import { create } from "zustand";
 import { useAuthStore } from "./useAuthStore";
 
-export const useCallStore = create((set, get) => ({
-  // Trạng thái UI
-  isCalling: false,           
-  isReceivingCall: false,    
-  callAccepted: false,       
-  callEnded: false,          
-
-  // Thông tin đối phương
-  caller: null,              
-  remoteUser: null,          
-
-  // Media Streams
-  myStream: null,            
-  userStream: null,          
-
-  // WebRTC Connection & Timing
+const initialState = {
+  isCalling: false,
+  isReceivingCall: false,
+  callAccepted: false,
+  caller: null,
+  remoteUser: null,
+  myStream: null,
+  userStream: null,
   peerConnection: null,
-  startTime: null,           
+  startTime: null,
+};
 
-  // --- 1. LẮNG NGHE ICE CANDIDATE (Sửa lỗi đen hình) ---
+export const useCallStore = create((set, get) => ({
+  ...initialState,
+
+  // --- 1. LẮNG NGHE ICE CANDIDATE ---
   setupIceCandidateListener: () => {
     const { socket } = useAuthStore.getState();
-    
-    // Xóa listener cũ để tránh trùng lặp khi gọi nhiều lần
     socket.off("ice-candidate");
 
     socket.on("ice-candidate", async ({ candidate }) => {
       const { peerConnection } = get();
-      if (peerConnection && candidate) {
+      if (peerConnection && candidate && peerConnection.remoteDescription) {
         try {
           await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log("✅ Đã nạp ICE Candidate từ đối phương thành công");
+          console.log("✅ ICE Candidate synchronized");
         } catch (error) {
-          console.error("❌ Lỗi nạp ICE Candidate:", error);
+          console.error("❌ ICE Error:", error);
         }
       }
     });
@@ -42,6 +36,9 @@ export const useCallStore = create((set, get) => ({
 
   // --- 2. KHỞI TẠO CUỘC GỌI (Người gọi) ---
   initiateCall: async (selectedUser) => {
+    // Chặn nếu đang bận
+    if (get().isCalling || get().callAccepted) return;
+
     const { socket, authUser } = useAuthStore.getState();
     
     try {
@@ -49,26 +46,19 @@ export const useCallStore = create((set, get) => ({
       set({ isCalling: true, remoteUser: selectedUser, myStream: stream });
 
       const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" }
-        ]
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }]
       });
 
-      // Lắng nghe ứng viên mạng của chính mình để gửi đi
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit("ice-candidate", { to: selectedUser._id, candidate: event.candidate });
         }
       };
 
-      // Khi nhận được stream từ đối phương
       pc.ontrack = (event) => {
-        console.log("🎬 Nhận được stream từ đối phương");
         set({ userStream: event.streams[0] });
       };
 
-      // Add camera/mic của mình vào kết nối
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const offer = await pc.createOffer();
@@ -82,9 +72,8 @@ export const useCallStore = create((set, get) => ({
       });
 
       set({ peerConnection: pc });
-      // Ghi chú: setupIceCandidateListener sẽ được gọi trong handleCallAccepted đối với người gọi
     } catch (err) {
-      console.error("Lỗi Camera/Micro:", err);
+      console.error("Camera error:", err);
       set({ isCalling: false });
     }
   },
@@ -93,8 +82,6 @@ export const useCallStore = create((set, get) => ({
   answerCall: async () => {
     const { socket, authUser } = useAuthStore.getState();
     const { caller } = get();
-    
-    // Người nhận cần lắng nghe ICE ngay lập tức
     get().setupIceCandidateListener();
 
     try {
@@ -107,10 +94,7 @@ export const useCallStore = create((set, get) => ({
       });
 
       const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" }
-        ]
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
       });
 
       pc.onicecandidate = (event) => {
@@ -120,7 +104,6 @@ export const useCallStore = create((set, get) => ({
       };
 
       pc.ontrack = (event) => {
-        console.log("🎬 Nhận được stream từ đối phương (Người nhận)");
         set({ userStream: event.streams[0] });
       };
 
@@ -133,25 +116,28 @@ export const useCallStore = create((set, get) => ({
       socket.emit("answerCall", { signal: answer, to: caller.from });
       set({ peerConnection: pc });
     } catch (err) {
-      console.error("Lỗi trả lời cuộc gọi:", err);
+      console.error("Answer error:", err);
     }
   },
 
-  // --- 4. KẾT THÚC CUỘC GỌI ---
+  // --- 4. KẾT THÚC CUỘC GỌI (Fix triệt để lỗi Camera sáng) ---
   leaveCall: () => {
     const { socket, authUser } = useAuthStore.getState();
     const { peerConnection, myStream, remoteUser, caller, startTime, callAccepted } = get();
 
-    const duration = (startTime && callAccepted) ? Math.floor((Date.now() - startTime) / 1000) : 0;
-
+    // Dừng tất cả các track video/audio ngay lập tức
     if (myStream) {
-      myStream.getTracks().forEach(track => track.stop());
+      myStream.getTracks().forEach(track => {
+        track.stop(); // Tắt phần cứng (đèn camera)
+        track.enabled = false;
+      });
     }
 
     if (peerConnection) {
-      peerConnection.close();
+      peerConnection.close(); // Đóng kết nối WebRTC
     }
 
+    const duration = (startTime && callAccepted) ? Math.floor((Date.now() - startTime) / 1000) : 0;
     const targetId = remoteUser?._id || caller?.from;
 
     if (targetId) {
@@ -164,34 +150,33 @@ export const useCallStore = create((set, get) => ({
 
     socket.off("ice-candidate");
 
-    set({
-      isCalling: false,
-      isReceivingCall: false,
-      callAccepted: false,
-      myStream: null,
-      userStream: null,
-      peerConnection: null,
-      caller: null,
-      remoteUser: null,
-      startTime: null
-    });
+    // Reset store về trạng thái ban đầu sạch sẽ
+    set(initialState);
   },
 
-  setIncomingCall: (data) => set({ isReceivingCall: true, caller: data }),
+  // --- 5. LOGIC CHỐNG CUỘC GỌI CHỒNG (Busy State) ---
+  setIncomingCall: (data) => {
+    const { isCalling, callAccepted, isReceivingCall } = get();
+    const { socket } = useAuthStore.getState();
+
+    // Nếu đang có bất kỳ hoạt động gọi nào, gửi tín hiệu bận cho đối phương
+    if (isCalling || callAccepted || isReceivingCall) {
+      socket.emit("call-busy", { to: data.from });
+      return;
+    }
+
+    set({ isReceivingCall: true, caller: data });
+  },
   
-  // --- 5. XỬ LÝ KHI ĐỐI PHƯƠNG CHẤP NHẬN (Quan trọng để fix 2 chiều) ---
   handleCallAccepted: async (signal) => {
     const { peerConnection } = get();
     if (peerConnection) {
       try {
-        // NGƯỜI GỌI: Phải bắt đầu lắng nghe ICE Candidate ngay khi người kia bắt máy
         get().setupIceCandidateListener(); 
-
         await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
         set({ callAccepted: true, startTime: Date.now() });
-        console.log("✅ Đã thông suốt kết nối WebRTC 2 chiều");
       } catch (error) {
-        console.error("❌ Lỗi setRemoteDescription:", error);
+        console.error("Accept error:", error);
       }
     }
   }

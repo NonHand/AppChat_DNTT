@@ -21,21 +21,20 @@ const App = () => {
   const { theme } = useThemeStore();
   const { 
     subscribeToChatUpdates, 
-    unsubscribeFromMessages, 
     getUsers, 
     getGroups,
-    getMessages, // Lấy hàm này để đồng bộ lại tin nhắn
+    getMessages, 
     selectedUser 
   } = useChatStore();
 
   const { 
     isCalling, 
     callAccepted, 
+    isReceivingCall,
     setIncomingCall, 
     handleCallAccepted, 
     answerCall, 
-    leaveCall,
-    peerConnection 
+    leaveCall
   } = useCallStore();
 
   useEffect(() => {
@@ -50,7 +49,10 @@ const App = () => {
 
       // 1. Nghe khi có người gọi đến
       socket.on("incomingCall", (data) => {
+        // Hàm setIncomingCall trong store đã có logic check bận (Busy)
         setIncomingCall(data);
+        
+        // Chỉ hiện Toast nếu store cho phép nhận cuộc gọi
         toast.custom((t) => (
           <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-base-100 shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5 border border-primary`}>
             <div className="flex-1 w-0 p-4">
@@ -62,7 +64,7 @@ const App = () => {
                 </div>
                 <div className="ml-3 flex-1">
                   <p className="text-sm font-medium text-base-content">Cuộc gọi video đến</p>
-                  <p className="mt-1 text-sm text-base-content/70">{data.name} đang gọi cho bạn...</p>
+                  <p className="mt-1 text-sm text-base-content/70">{data.name} đang gọi...</p>
                 </div>
               </div>
             </div>
@@ -87,7 +89,7 @@ const App = () => {
               </button>
             </div>
           </div>
-        ), { duration: 30000 });
+        ), { id: "incoming-call", duration: 30000 });
       });
 
       // 2. Nghe khi đối phương chấp nhận cuộc gọi
@@ -95,38 +97,39 @@ const App = () => {
         handleCallAccepted(signal);
       });
 
-      // 3. Nghe khi ĐỐI PHƯƠNG cúp máy
-      socket.on("endCall", () => {
-        // Tắt Camera/Micro local
-        leaveCall(); 
-        toast.error("Cuộc gọi đã kết thúc");
-
-        // QUAN TRỌNG: Cập nhật lại tin nhắn ngay lập tức
-        // Nếu đang mở đúng cửa sổ chat với người vừa gọi, load lại messages
-        if (selectedUser) {
-          getMessages(selectedUser._id);
-        }
+      // 3. Nghe khi đối phương đang bận (Mới thêm)
+      socket.on("user-busy", () => {
+        toast.error("Người dùng đang trong cuộc gọi khác", { id: "busy-error" });
+        leaveCall();
       });
 
-      // 4. Nghe trao đổi ICE Candidates
-      socket.on("ice-candidate", async (candidate) => {
-        if (peerConnection) {
-          try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (e) {
-            console.error("Lỗi add ice candidate", e);
-          }
+      // 4. Nghe khi ĐỐI PHƯƠNG cúp máy
+      socket.on("endCall", () => {
+        leaveCall(); 
+        toast.dismiss("incoming-call");
+        toast("Cuộc gọi đã kết thúc", { icon: '📞' });
+
+        // Cập nhật lại tin nhắn để hiện log cuộc gọi vừa kết thúc
+        if (selectedUser) {
+          getMessages(selectedUser._id);
         }
       });
 
       return () => {
         socket.off("incomingCall");
         socket.off("callAccepted");
+        socket.off("user-busy");
         socket.off("endCall");
-        socket.off("ice-candidate");
       };
     }
-  }, [authUser, socket, getUsers, getGroups, peerConnection, selectedUser, getMessages]); // Thêm dependencies vào đây
+  }, [authUser, socket, getUsers, getGroups, selectedUser, getMessages, answerCall, leaveCall, handleCallAccepted, setIncomingCall, subscribeToChatUpdates]);
+
+  // Tự động đóng toast nếu máy nhận tự tắt modal cuộc gọi
+  useEffect(() => {
+    if (!isReceivingCall) {
+      toast.dismiss("incoming-call");
+    }
+  }, [isReceivingCall]);
 
   if (isCheckingAuth && !authUser)
     return (
@@ -136,7 +139,7 @@ const App = () => {
     );
 
   return (
-    <div data-theme={theme} className="min-h-screen">
+    <div data-theme={theme} className="min-h-screen transition-colors duration-200">
       <Navbar />
 
       <Routes>
@@ -147,7 +150,8 @@ const App = () => {
         <Route path="/profile" element={authUser ? <ProfilePage /> : <Navigate to="/login" />} />
       </Routes>
 
-      {(isCalling || callAccepted) && <VideoModal />}
+      {/* Hiển thị Modal khi có bất kỳ hoạt động gọi nào */}
+      {(isCalling || callAccepted || isReceivingCall) && <VideoModal />}
 
       <Toaster position="top-center" />
     </div>

@@ -6,7 +6,7 @@ import Message from "../models/message.model.js";
 const app = express();
 const server = http.createServer(app);
 
-// Cấu hình CORS linh hoạt
+// Cấu hình CORS linh hoạt cho Production và Local
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === "production" 
@@ -18,6 +18,9 @@ const io = new Server(server, {
 // Lưu trữ danh sách người dùng online: {userId: socketId}
 const userSocketMap = {}; 
 
+/**
+ * Lấy socketId từ UserId (MongoDB _id)
+ */
 export function getReceiverSocketId(userId) {
   return userSocketMap[userId];
 }
@@ -30,7 +33,7 @@ io.on("connection", (socket) => {
     console.log(`User connected: ${userId} (Socket: ${socket.id})`);
   }
 
-  // Gửi danh sách online
+  // Gửi danh sách online cho tất cả mọi người
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
   // ==========================================
@@ -41,15 +44,26 @@ io.on("connection", (socket) => {
   socket.on("callUser", ({ userToCall, signalData, from, name }) => {
     const receiverSocketId = getReceiverSocketId(userToCall);
     if (receiverSocketId) {
+      console.log(`📞 Call Request: From ${name} to ${userToCall}`);
       io.to(receiverSocketId).emit("incomingCall", { 
         signal: signalData, 
-        from: from, // User ID của người gọi
+        from: from, // User ID người gọi
         name 
       });
     }
   });
 
-  // 2. Trả lời cuộc gọi
+  // 2. Xử lý khi máy nhận đang bận (Mới thêm)
+  // Được gọi từ FE khi người dùng đang trong callAccepted hoặc isCalling
+  socket.on("call-busy", ({ to }) => {
+    const callerSocketId = getReceiverSocketId(to);
+    if (callerSocketId) {
+      console.log(`🚫 User is busy: ${to}`);
+      io.to(callerSocketId).emit("user-busy");
+    }
+  });
+
+  // 3. Trả lời cuộc gọi
   socket.on("answerCall", (data) => {
     const callerSocketId = getReceiverSocketId(data.to) || data.to; 
     if (callerSocketId) {
@@ -57,32 +71,30 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 3. ICE Candidates - PHẦN QUAN TRỌNG ĐỂ CÓ VIDEO 2 CHIỀU
+  // 4. Trao đổi ICE Candidates (Địa chỉ mạng)
   socket.on("ice-candidate", (data) => {
-    // Luôn ưu tiên tìm SocketId từ UserId để gửi chính xác
     const targetSocketId = userSocketMap[data.to] || data.to;
-    
     if (targetSocketId) {
-      // Gửi object chứa key candidate để FE bóc tách dễ dàng
       io.to(targetSocketId).emit("ice-candidate", { 
         candidate: data.candidate 
       });
     }
   });
 
-  // 4. Kết thúc và Lưu tin nhắn Log
+  // 5. Kết thúc cuộc gọi & Lưu Log
   socket.on("endCall", async ({ to, duration, senderId }) => {
     const targetSocketId = userSocketMap[to] || to;
     
+    // Gửi tín hiệu cúp máy cho đối phương ngay lập tức
     if (targetSocketId) {
       io.to(targetSocketId).emit("endCall");
     }
 
-    // Logic lưu vào DB
+    // Lưu vào Database
     try {
       if (senderId && to) {
-        // Đảm bảo lấy được MongoDB ID (receiverUserId)
         let receiverUserId = to;
+        // Kiểm tra nếu 'to' đang là socketId thì chuyển về UserId
         for (const [uId, sId] of Object.entries(userSocketMap)) {
           if (sId === to) {
             receiverUserId = uId;
@@ -103,7 +115,7 @@ io.on("connection", (socket) => {
 
         await callMessage.save();
 
-        // Phát tin nhắn mới cho cả 2 để update UI chat
+        // Cập nhật tin nhắn cho cả 2 bên
         const receiverSocketId = getReceiverSocketId(receiverUserId);
         const senderSocketId = getReceiverSocketId(senderId);
 
@@ -111,7 +123,7 @@ io.on("connection", (socket) => {
         if (senderSocketId) io.to(senderSocketId).emit("newMessage", callMessage);
       }
     } catch (error) {
-      console.error("Error saving call log:", error);
+      console.error("❌ Error saving call log:", error);
     }
   });
 
@@ -127,7 +139,7 @@ io.on("connection", (socket) => {
   });
 
   // ==========================================
-  // DISCONNECT (Giữ nguyên)
+  // DISCONNECT
   // ==========================================
   socket.on("disconnect", () => {
     if (userId) {

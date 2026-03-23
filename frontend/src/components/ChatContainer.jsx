@@ -18,11 +18,31 @@ const ChatContainer = () => {
     unsubscribeFromMessages,
     deleteMessage,
     markAsRead,
-    setReplyingMessage, // Thêm action reply
+    setReplyingMessage,
   } = useChatStore();
   
   const { authUser } = useAuthStore();
   const messageEndRef = useRef(null);
+
+  // Hàm xử lý tải file an toàn để tránh lỗi "file lạ"
+  const handleDownload = async (url, fileName) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = fileName || "downloaded_file";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      console.error("Download error:", error);
+      // Phương án dự phòng nếu fetch bị chặn CORS
+      window.open(url, "_blank");
+    }
+  };
 
   useEffect(() => {
     getMessages(selectedUser._id);
@@ -185,15 +205,14 @@ const ChatContainer = () => {
                           {message.fileSize ? `${(message.fileSize / 1024).toFixed(1)} KB` : "Document"}
                         </span>
                       </div>
-                      <a 
-                        href={message.fileUrl} 
-                        download={message.fileName}
-                        target="_blank"
-                        rel="noreferrer"
+                      {/* SỬA LỖI TẢI FILE TẠI ĐÂY: Sử dụng button thay vì <a> để call hàm handleDownload */}
+                      <button 
+                        onClick={() => handleDownload(message.fileUrl, message.fileName)}
                         className="p-2 hover:bg-primary/20 text-primary rounded-full transition-all"
+                        title="Tải về"
                       >
                         <Download size={18} />
-                      </a>
+                      </button>
                     </div>
                     {message.text && <p className="text-sm px-1">{message.text}</p>}
                   </div>

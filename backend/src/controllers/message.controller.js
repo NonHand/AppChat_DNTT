@@ -70,7 +70,7 @@ export const getMessages = async (req, res) => {
         .populate("readBy.user", "fullName profilePic")
         .populate({
           path: "replyTo",
-          populate: { path: "senderId", select: "fullName" } // Lấy tên người gửi tin nhắn gốc để hiển thị ở phần reply
+          populate: { path: "senderId", select: "fullName" }
         })
         .sort({ createdAt: 1 });
 
@@ -113,7 +113,6 @@ export const getMessages = async (req, res) => {
       if (messageObj.text) {
         messageObj.text = decrypt(messageObj.text);
       }
-      // Giải mã cả nội dung tin nhắn được reply nếu nó là text
       if (messageObj.replyTo && messageObj.replyTo.text) {
         messageObj.replyTo.text = decrypt(messageObj.replyTo.text);
       }
@@ -129,25 +128,25 @@ export const getMessages = async (req, res) => {
 
 export const sendMessage = async (req, res) => {
   try {
-    // Nhận thêm replyTo từ body
     const { text, image, images, audio, file, fileName, fileSize, replyTo } = req.body;
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
     let imageUrls = [];
+    // Tối ưu hóa upload ảnh: thêm folder để quản lý
     if (images && Array.isArray(images) && images.length > 0) {
-      const uploadPromises = images.map((img) => cloudinary.uploader.upload(img));
+      const uploadPromises = images.map((img) => cloudinary.uploader.upload(img, { folder: "chat_images" }));
       const uploadResponses = await Promise.all(uploadPromises);
       imageUrls = uploadResponses.map((res) => res.secure_url);
     } else if (image) {
-      const uploadResponse = await cloudinary.uploader.upload(image);
+      const uploadResponse = await cloudinary.uploader.upload(image, { folder: "chat_images" });
       imageUrls = [uploadResponse.secure_url];
     }
 
     let audioUrl;
     if (audio) {
       const uploadResponse = await cloudinary.uploader.upload(audio, {
-        resource_type: "video",
+        resource_type: "video", // Audio trong Cloudinary dùng video type
         folder: "voice_messages",
       });
       audioUrl = uploadResponse.secure_url;
@@ -155,8 +154,9 @@ export const sendMessage = async (req, res) => {
 
     let fileUrl;
     if (file) {
+      // SỬA LỖI: Sử dụng resource_type: "auto" và không ép kiểu để tránh hỏng file binary
       const uploadResponse = await cloudinary.uploader.upload(file, {
-        resource_type: "auto",
+        resource_type: "auto", 
         folder: "chat_files",
       });
       fileUrl = uploadResponse.secure_url;
@@ -176,7 +176,7 @@ export const sendMessage = async (req, res) => {
       fileSize: fileSize,
       messageType: fileUrl ? "file" : audio ? "voice" : imageUrls.length > 0 ? "image" : "text",
       isRead: false,
-      replyTo: replyTo || null, // Lưu ID tin nhắn được trả lời
+      replyTo: replyTo || null,
     };
 
     if (isGroup) {
@@ -189,7 +189,6 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
-    // Populate thông tin đầy đủ bao gồm cả tin nhắn được reply để gửi qua socket
     const populatedMessage = await Message.findById(newMessage._id)
       .populate("senderId", "fullName profilePic")
       .populate("readBy.user", "fullName profilePic")
@@ -199,9 +198,8 @@ export const sendMessage = async (req, res) => {
       });
 
     const messageToSend = populatedMessage.toObject();
-    messageToSend.text = text; // Trả về text đã giải mã cho client
+    messageToSend.text = text;
 
-    // Giải mã text của tin nhắn replyTo nếu có
     if (messageToSend.replyTo && messageToSend.replyTo.text) {
       messageToSend.replyTo.text = decrypt(messageToSend.replyTo.text);
     }
@@ -274,26 +272,34 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    // Hàm lấy Public ID từ URL Cloudinary một cách an toàn
+    const getPublicId = (url) => {
+      const parts = url.split("/");
+      const folder = parts[parts.length - 2];
+      const filename = parts[parts.length - 1].split(".")[0];
+      return `${folder}/${filename}`;
+    };
+
+    // Xóa ảnh
     if (message.images && message.images.length > 0) {
-      const deletePromises = message.images.map((img) => {
-        const parts = img.split("/");
-        const publicId = parts[parts.length - 1].split(".")[0];
-        return cloudinary.uploader.destroy(publicId);
-      });
+      const deletePromises = message.images.map((img) => 
+        cloudinary.uploader.destroy(getPublicId(img))
+      );
       await Promise.all(deletePromises);
     } else if (message.image) {
-      const publicId = message.image.split("/").pop().split(".")[0];
-      await cloudinary.uploader.destroy(publicId);
+      await cloudinary.uploader.destroy(getPublicId(message.image));
     }
 
+    // Xóa Audio (resource_type: video)
     if (message.audio) {
-      const publicId = message.audio.split("/").pop().split(".")[0];
-      await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
+      await cloudinary.uploader.destroy(getPublicId(message.audio), { resource_type: "video" });
     }
     
+    // Xóa File (resource_type: auto/raw tùy cách upload nhưng auto an toàn nhất)
     if (message.fileUrl) {
-      const publicId = "chat_files/" + message.fileUrl.split("/").pop().split(".")[0];
-      await cloudinary.uploader.destroy(publicId, { resource_type: "raw" }); 
+      // Cloudinary lưu file không phải media thường ở dạng resource_type "raw" hoặc "image" tùy extension
+      // Để an toàn, chúng ta xóa với type đã upload
+      await cloudinary.uploader.destroy(getPublicId(message.fileUrl), { resource_type: "auto" }); 
     }
 
     await Message.findByIdAndDelete(messageId);
@@ -317,7 +323,6 @@ export const clearChat = async (req, res) => {
   try {
     const { id: chatId } = req.params;
     const myId = req.user._id;
-
     const isGroup = await Group.exists({ _id: chatId });
 
     if (isGroup) {

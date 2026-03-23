@@ -28,34 +28,35 @@ export const useChatStore = create((set, get) => ({
   isGroupsLoading: false,
 
   getUsers: async () => {
-    set({ isUsersLoading: true });
-    try {
-      const res = await axiosInstance.get("/messages/users");
-      set({ users: res.data });
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Lỗi tải danh sách người dùng");
-    } finally {
-      set({ isUsersLoading: false });
-    }
-  },
+  // Chỉ hiện loading nếu danh sách đang trống (lần đầu tải)
+  if (get().users.length === 0) set({ isUsersLoading: true }); 
+  try {
+    const res = await axiosInstance.get("/messages/users");
+    set({ users: res.data });
+  } catch (error) {
+    toast.error("Lỗi tải danh sách người dùng");
+  } finally {
+    set({ isUsersLoading: false });
+  }
+},
 
-  getGroups: async () => {
-    set({ isGroupsLoading: true });
-    try {
-      const res = await axiosInstance.get("/groups");
-      set({ groups: res.data });
-      const socket = useAuthStore.getState().socket;
+getGroups: async () => {
+  if (get().groups.length === 0) set({ isGroupsLoading: true });
+  try {
+    const res = await axiosInstance.get("/groups");
+    set({ groups: res.data });
+    const socket = useAuthStore.getState().socket;
       if (socket) {
         res.data.forEach(group => {
           socket.emit("joinGroup", group._id);
         });
       }
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Lỗi khi tải nhóm");
-    } finally {
-      set({ isGroupsLoading: false });
-    }
-  },
+  } catch (error) {
+    toast.error(error.response?.data?.message || "Lỗi khi tải nhóm");
+  } finally {
+    set({ isGroupsLoading: false });
+  }
+},
 
   getMessages: async (chatId) => {
     set({ isMessagesLoading: true });

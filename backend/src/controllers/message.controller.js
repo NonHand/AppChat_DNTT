@@ -39,39 +39,40 @@ import { decrypt, encrypt } from "../lib/encryption.js";
 export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
+    
+    // 1. Lấy danh sách người dùng (trừ bản thân)
     const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
 
     const usersWithLastMsg = await Promise.all(
       users.map(async (user) => {
+        // Tìm tin nhắn cuối cùng giữa 2 người
         const lastMessage = await Message.findOne({
           $or: [
             { senderId: loggedInUserId, receiverId: user._id },
             { senderId: user._id, receiverId: loggedInUserId },
           ],
-        }).sort({ createdAt: -1 });
+        }).sort({ createdAt: -1 }).lean();
 
-        // --- PHẦN THÊM MỚI: GIẢI MÃ TIN NHẮN ---
         let processedLastMessage = null;
         if (lastMessage) {
-          // Chuyển Document thành Object thuần để có thể chỉnh sửa field text
-          processedLastMessage = { ...lastMessage }; 
-          
+          processedLastMessage = { ...lastMessage };
+          // GIẢI MÃ ở đây cho Cá nhân
           if (processedLastMessage.text) {
-            // Giải mã nội dung tin nhắn trước khi trả về cho Sidebar
             processedLastMessage.text = decrypt(processedLastMessage.text);
           }
         }
-        // ---------------------------------------
 
         return {
           ...user,
-          lastMessage: processedLastMessage, // Trả về tin nhắn đã giải mã
+          lastMessage: processedLastMessage,
           lastMsgTime: lastMessage ? lastMessage.createdAt : user.createdAt,
         };
       })
     );
 
+    // Sắp xếp theo thời gian tin nhắn mới nhất
     usersWithLastMsg.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
+    
     res.status(200).json(usersWithLastMsg);
   } catch (error) {
     console.error("Error in getUsersForSidebar: ", error.message);

@@ -3,7 +3,7 @@ import cloudinary from "../lib/cloudinary.js";
 //import { io } from "../lib/socket.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import Message from "../models/message.model.js";
-
+import { decrypt } from "../lib/encryption.js";
 /* export const createGroup = async (req, res) => {
   try {
     const { name, members, groupAvatar } = req.body;
@@ -86,12 +86,23 @@ export const getGroups = async (req, res) => {
     const groupsWithLastMsg = await Promise.all(
       groups.map(async (group) => {
         const lastMessage = await Message.findOne({ groupId: group._id })
-          .sort({ createdAt: -1 }) // Lấy tin nhắn mới nhất
-          .populate("senderId", "fullName"); // Lấy tên người gửi tin nhắn cuối
+          .sort({ createdAt: -1 })
+          .populate("senderId", "fullName")
+          .lean();
+
+        // --- ĐOẠN CẦN SỬA/THÊM ---
+        let processedLastMessage = null;
+        if (lastMessage) {
+          processedLastMessage = { ...lastMessage };
+          if (processedLastMessage.text) {
+            // Giải mã tin nhắn cuối cùng của nhóm tại đây
+            processedLastMessage.text = decrypt(processedLastMessage.text);
+          }
+        }
 
         return {
           ...group,
-          lastMessage: lastMessage ? lastMessage : null,
+          lastMessage:processedLastMessage,
           // Nếu có tin nhắn dùng thời gian tin nhắn, nếu chưa có dùng thời gian tạo nhóm
           lastMsgTime: lastMessage ? lastMessage.createdAt : group.createdAt,
         };

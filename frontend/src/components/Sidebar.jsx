@@ -60,7 +60,9 @@ const Sidebar = () => {
     );
   };
 
-  if (isUsersLoading || isGroupsLoading) return <SidebarSkeleton />;
+  if ((isUsersLoading && users.length === 0) || (isGroupsLoading && groups.length === 0)) {
+    return <SidebarSkeleton />;
+  }
 
   return (
     <>

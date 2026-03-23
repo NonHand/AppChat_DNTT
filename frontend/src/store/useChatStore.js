@@ -73,14 +73,10 @@ export const useChatStore = create((set, get) => ({
   sendMessage: async (messageData) => {
     const { selectedUser, messages, users, groups } = get();
     try {
-      // API hiện tại sẽ nhận payload chứa { text, images, audio, file... }
       const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
       const newMessage = res.data;
-
-      // Cập nhật danh sách tin nhắn hiển thị
       set({ messages: [...messages, newMessage] });
 
-      // Cập nhật tin nhắn cuối cùng ở Sidebar để người dùng thấy phản hồi ngay
       if (newMessage.groupId) {
         const updatedGroups = groups.map(g => 
           g._id === newMessage.groupId ? { ...g, lastMessage: newMessage } : g
@@ -157,7 +153,33 @@ export const useChatStore = create((set, get) => ({
         ? msgGroupId === currentChatId 
         : (msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId));
 
-      // Nhận tin nhắn từ socket (chỉ push nếu không phải do chính mình gửi)
+      // --- LOGIC THÔNG BÁO (PING & TAB TITLE) ---
+      if (msgSenderId !== authUser._id.toString()) {
+        // 1. Phát âm thanh Ping
+        const notificationSound = new Audio("/ping.mp3");
+        notificationSound.volume = 0.5;
+        notificationSound.play().catch(() => console.log("Yêu cầu tương tác trang để phát âm thanh"));
+
+        // 2. Thông báo trên tiêu đề Tab nếu không nhìn thấy tin nhắn trực tiếp
+        if (document.hidden || chatIdOfIncomingMsg !== currentChatId) {
+          const originalTitle = "MERN Chat"; // Hoặc document.title gốc của bạn
+          const senderName = newMessage.senderId.fullName || "Ai đó";
+          
+          // Tạo hiệu ứng nhấp nháy tiêu đề
+          let isFlash = false;
+          const flashInterval = setInterval(() => {
+            document.title = isFlash ? originalTitle : `🔔 ${senderName} vừa nhắn...`;
+            isFlash = !isFlash;
+          }, 1000);
+
+          // Dừng nhấp nháy sau 4 giây
+          setTimeout(() => {
+            clearInterval(flashInterval);
+            document.title = originalTitle;
+          }, 4000);
+        }
+      }
+
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
         const isExisted = messages.some(m => m._id === newMessage._id);
         if (!isExisted) {
@@ -165,7 +187,6 @@ export const useChatStore = create((set, get) => ({
         }
       } 
       
-      // Xử lý thông báo tin nhắn chưa đọc
       if (msgSenderId !== authUser._id.toString() && chatIdOfIncomingMsg !== currentChatId) {
         const newCounts = {
           ...unreadCounts,
@@ -175,7 +196,6 @@ export const useChatStore = create((set, get) => ({
         setStoredUnreadCounts(newCounts);
       }
 
-      // Cập nhật tin nhắn cuối và đẩy lên đầu danh sách ở Sidebar
       if (msgGroupId) {
         const updatedGroups = groups.map((g) => 
           g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g

@@ -29,6 +29,13 @@ export const useChatStore = create((set, get) => ({
   isMessagesLoading: false,
   isGroupsLoading: false,
 
+  // --- TRẠNG THÁI REPLY ---
+  replyingMessage: null,
+
+  setReplyingMessage: (message) => set({ replyingMessage: message }),
+  clearReplyingMessage: () => set({ replyingMessage: null }),
+  // ------------------------
+
   getUsers: async () => {
     if (get().users.length === 0) set({ isUsersLoading: true });
     try {
@@ -36,7 +43,6 @@ export const useChatStore = create((set, get) => ({
       const users = res.data;
       set({ users });
 
-      // ĐỒNG BỘ SỐ TIN NHẮN CHƯA ĐỌC CỦA USER TỪ DATABASE
       const currentCounts = { ...get().unreadCounts };
       users.forEach((u) => {
         currentCounts[u._id] = u.unreadCount || 0;
@@ -58,10 +64,8 @@ export const useChatStore = create((set, get) => ({
       const groups = res.data;
       set({ groups: groups });
 
-      // ĐỒNG BỘ SỐ TIN NHẮN CHƯA ĐỌC CỦA GROUP TỪ DATABASE
       const currentCounts = { ...get().unreadCounts };
       groups.forEach((g) => {
-        // g.unreadCount được trả về từ group.controller.js bạn vừa cập nhật
         currentCounts[g._id] = g.unreadCount || 0;
       });
 
@@ -86,7 +90,6 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.get(`/messages/${chatId}`);
       set({ messages: res.data });
-      // Khi lấy tin nhắn, tự động đánh dấu đã xem
       get().markAsRead(chatId);
     } catch (error) {
       toast.error(error.response?.data?.message || "Lỗi tải tin nhắn");
@@ -96,11 +99,21 @@ export const useChatStore = create((set, get) => ({
   },
 
   sendMessage: async (messageData) => {
-    const { selectedUser, messages, users, groups } = get();
+    const { selectedUser, messages, users, groups, replyingMessage } = get();
     try {
-      const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
+      // Đính kèm replyTo nếu có
+      const payload = {
+        ...messageData,
+        replyTo: replyingMessage ? replyingMessage._id : null,
+      };
+
+      const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, payload);
       const newMessage = res.data;
+      
       set({ messages: [...messages, newMessage] });
+      
+      // Reset trạng thái reply sau khi gửi thành công
+      if (replyingMessage) get().clearReplyingMessage();
 
       if (newMessage.groupId) {
         const updatedGroups = groups
@@ -208,7 +221,6 @@ export const useChatStore = create((set, get) => ({
         ? msgGroupId === currentChatId
         : msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId);
 
-      // Xử lý thông báo (âm thanh + tiêu đề)
       if (msgSenderId !== authUser._id.toString()) {
         if (isSoundEnabled) {
           const notificationSound = new Audio("/ping.mp3");
@@ -237,7 +249,6 @@ export const useChatStore = create((set, get) => ({
         }
       }
 
-      // Thêm tin nhắn vào list nếu đang mở chat đó
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
         const isExisted = messages.some((m) => m._id === newMessage._id);
         if (!isExisted) {
@@ -246,7 +257,6 @@ export const useChatStore = create((set, get) => ({
         get().markAsRead(chatIdOfIncomingMsg);
       }
 
-      // Tăng bộ đếm nếu nhận tin nhắn từ chat không active
       if (msgSenderId !== authUser._id.toString() && chatIdOfIncomingMsg !== currentChatId) {
         const newCounts = {
           ...unreadCounts,
@@ -256,7 +266,6 @@ export const useChatStore = create((set, get) => ({
         setStoredUnreadCounts(newCounts);
       }
 
-      // Cập nhật lastMessage và sắp xếp danh sách (User/Group)
       if (msgGroupId) {
         const updatedGroups = groups
           .map((g) => (g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g))
@@ -278,17 +287,14 @@ export const useChatStore = create((set, get) => ({
     const authUser = useAuthStore.getState().authUser;
 
     try {
-      // Reset bộ đếm cục bộ
       if (unreadCounts[chatId]) {
         const newCounts = { ...unreadCounts, [chatId]: 0 };
         set({ unreadCounts: newCounts });
         setStoredUnreadCounts(newCounts);
       }
 
-      // Gọi API cập nhật Database
       await axiosInstance.put(`/messages/read/${chatId}`);
 
-      // Gửi Socket thông báo cho đối phương
       if (socket && authUser) {
         const isGroup = !!selectedUser?.members;
         socket.emit("markAsRead", {
@@ -360,7 +366,7 @@ export const useChatStore = create((set, get) => ({
   },
 
   setSelectedUser: (selectedUser) => {
-    set({ selectedUser });
+    set({ selectedUser, replyingMessage: null }); // Xóa reply khi đổi chat
     if (selectedUser) {
       get().markAsRead(selectedUser._id);
     }

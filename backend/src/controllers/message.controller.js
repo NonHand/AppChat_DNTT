@@ -9,12 +9,10 @@ import { decrypt, encrypt } from "../lib/encryption.js";
 export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
-    // Lấy danh sách users khác
     const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
 
     const usersWithDetails = await Promise.all(
       users.map(async (user) => {
-        // 1. Lấy tin nhắn cuối cùng (giữ nguyên logic cũ của bạn)
         const lastMessage = await Message.findOne({
           $or: [
             { senderId: loggedInUserId, receiverId: user._id },
@@ -22,7 +20,6 @@ export const getUsersForSidebar = async (req, res) => {
           ],
         }).sort({ createdAt: -1 }).lean();
 
-        // 2. TÍNH NĂNG MỚI: Đếm số tin nhắn chưa đọc từ user này gửi cho tôi
         const unreadCount = await Message.countDocuments({
           senderId: user._id,
           receiverId: loggedInUserId,
@@ -40,13 +37,12 @@ export const getUsersForSidebar = async (req, res) => {
         return {
           ...user,
           lastMessage: processedLastMessage,
-          unreadCount, // Thêm trường này để frontend hiển thị số đỏ
+          unreadCount,
           lastMsgTime: lastMessage ? lastMessage.createdAt : user.createdAt,
         };
       })
     );
 
-    // Sắp xếp theo tin nhắn mới nhất
     usersWithDetails.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
     res.status(200).json(usersWithDetails);
   } catch (error) {
@@ -64,7 +60,6 @@ export const getMessages = async (req, res) => {
 
     let messages;
     if (isGroup) {
-      // Đánh dấu mình đã xem các tin nhắn trong group trước khi lấy dữ liệu
       await Message.updateMany(
         { groupId: chatPartnerId, "readBy.user": { $ne: myId } },
         { $push: { readBy: { user: myId } } }
@@ -72,10 +67,13 @@ export const getMessages = async (req, res) => {
 
       messages = await Message.find({ groupId: chatPartnerId })
         .populate("senderId", "fullName profilePic")
-        .populate("readBy.user", "fullName profilePic") 
+        .populate("readBy.user", "fullName profilePic")
+        .populate({
+          path: "replyTo",
+          populate: { path: "senderId", select: "fullName" } // Lấy tên người gửi tin nhắn gốc để hiển thị ở phần reply
+        })
         .sort({ createdAt: 1 });
 
-      // Phát socket báo cho mọi người trong group rằng mình đã xem
       io.to(chatPartnerId).emit("messagesRead", {
         chatId: chatPartnerId,
         readBy: await User.findById(myId).select("fullName profilePic"),
@@ -90,9 +88,12 @@ export const getMessages = async (req, res) => {
         ],
       })
       .populate("readBy.user", "fullName profilePic")
+      .populate({
+        path: "replyTo",
+        populate: { path: "senderId", select: "fullName" }
+      })
       .sort({ createdAt: 1 });
 
-      // Tự động đánh dấu đã xem khi lấy tin nhắn cá nhân
       await Message.updateMany(
         { senderId: chatPartnerId, receiverId: myId, isRead: false },
         { isRead: true }
@@ -112,6 +113,10 @@ export const getMessages = async (req, res) => {
       if (messageObj.text) {
         messageObj.text = decrypt(messageObj.text);
       }
+      // Giải mã cả nội dung tin nhắn được reply nếu nó là text
+      if (messageObj.replyTo && messageObj.replyTo.text) {
+        messageObj.replyTo.text = decrypt(messageObj.replyTo.text);
+      }
       return messageObj;
     });
 
@@ -124,7 +129,8 @@ export const getMessages = async (req, res) => {
 
 export const sendMessage = async (req, res) => {
   try {
-    const { text, image, images, audio, file, fileName, fileSize } = req.body;
+    // Nhận thêm replyTo từ body
+    const { text, image, images, audio, file, fileName, fileSize, replyTo } = req.body;
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
@@ -170,6 +176,7 @@ export const sendMessage = async (req, res) => {
       fileSize: fileSize,
       messageType: fileUrl ? "file" : audio ? "voice" : imageUrls.length > 0 ? "image" : "text",
       isRead: false,
+      replyTo: replyTo || null, // Lưu ID tin nhắn được trả lời
     };
 
     if (isGroup) {
@@ -182,12 +189,22 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
+    // Populate thông tin đầy đủ bao gồm cả tin nhắn được reply để gửi qua socket
     const populatedMessage = await Message.findById(newMessage._id)
       .populate("senderId", "fullName profilePic")
-      .populate("readBy.user", "fullName profilePic");
+      .populate("readBy.user", "fullName profilePic")
+      .populate({
+        path: "replyTo",
+        populate: { path: "senderId", select: "fullName" }
+      });
 
     const messageToSend = populatedMessage.toObject();
-    messageToSend.text = text; 
+    messageToSend.text = text; // Trả về text đã giải mã cho client
+
+    // Giải mã text của tin nhắn replyTo nếu có
+    if (messageToSend.replyTo && messageToSend.replyTo.text) {
+      messageToSend.replyTo.text = decrypt(messageToSend.replyTo.text);
+    }
 
     if (isGroup) {
       io.to(receiverOrGroupId).emit("newMessage", messageToSend);

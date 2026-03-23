@@ -17,6 +17,16 @@ const messageSchema = new Schema(
       ref: "Group",
       default: null,
     },
+
+    // --- CHỨC NĂNG REPLY (TRẢ LỜI TIN NHẮN) ---
+    // Liên kết tới ID của tin nhắn gốc được trả lời
+    replyTo: {
+      type: Schema.Types.ObjectId,
+      ref: "Message",
+      default: null,
+    },
+    // ------------------------------------------
+
     messageType: {
       type: String,
       enum: ["text", "image", "video_call", "voice", "file", "call"], 
@@ -101,6 +111,9 @@ messageSchema.index({ senderId: 1, receiverId: 1, createdAt: -1 });
 // Index cho tính năng tìm kiếm tin nhắn chưa đọc và hiển thị trạng thái
 messageSchema.index({ receiverId: 1, isRead: 1 });
 messageSchema.index({ "readBy.user": 1 }); // Index cho mảng readBy trong Group
+
+// Index cho chức năng reply để truy vấn nhanh tin nhắn gốc
+messageSchema.index({ replyTo: 1 });
 
 const Message = model("Message", messageSchema);
 

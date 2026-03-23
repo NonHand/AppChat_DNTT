@@ -1,11 +1,10 @@
 import { useRef, useState } from "react";
 import { useChatStore } from "../store/useChatStore";
-import { Image, Send, X, Mic, Square, Paperclip, FileText } from "lucide-react";
+import { Image, Send, X, Mic, Square, Paperclip, FileText, Reply } from "lucide-react";
 import toast from "react-hot-toast";
 
 const MessageInput = () => {
   const [text, setText] = useState("");
-  // Chuyển sang mảng để lưu nhiều ảnh preview
   const [imagePreviews, setImagePreviews] = useState([]);
   const [filePreview, setFilePreview] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -16,14 +15,13 @@ const MessageInput = () => {
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
 
-  const { sendMessage, selectedUser } = useChatStore();
+  // Lấy thêm state và action cho Reply
+  const { sendMessage, selectedUser, replyingMessage, clearReplyingMessage } = useChatStore();
 
-  // --- XỬ LÝ NHIỀU HÌNH ẢNH ---
   const handleImageChange = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
 
-    // Giới hạn số lượng ảnh (VD: tối đa 5 ảnh)
     if (imagePreviews.length + files.length > 5) {
       toast.error("You can only upload up to 5 images at once");
       return;
@@ -38,13 +36,12 @@ const MessageInput = () => {
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreviews((prev) => [...prev, reader.result]);
-        setFilePreview(null); // Tắt preview file nếu chọn ảnh
+        setFilePreview(null);
       };
       reader.readAsDataURL(file);
     });
   };
 
-  // --- XỬ LÝ FILE ---
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -61,7 +58,7 @@ const MessageInput = () => {
         size: file.size,
         base64: reader.result,
       });
-      setImagePreviews([]); // Tắt preview ảnh nếu chọn file
+      setImagePreviews([]);
     };
     reader.readAsDataURL(file);
   };
@@ -76,7 +73,6 @@ const MessageInput = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // --- LOGIC XỬ LÝ VOICE ---
   const startRecording = async () => {
     try {
       setAudioPreview(null);
@@ -127,12 +123,12 @@ const MessageInput = () => {
     try {
       const messagePayload = {
         text: text.trim(),
-        // Gửi mảng images cho backend xử lý
         images: imagePreviews, 
         audio: audioPreview,
         file: filePreview?.base64,
         fileName: filePreview?.name,
         fileSize: filePreview?.size,
+        // Chức năng reply được store tự động xử lý khi gọi sendMessage nhờ update trước đó
       };
 
       if (selectedUser?.members) {
@@ -146,6 +142,7 @@ const MessageInput = () => {
       setImagePreviews([]);
       setAudioPreview(null);
       setFilePreview(null);
+      // clearReplyingMessage() đã được gọi bên trong store.sendMessage
       if (imageInputRef.current) imageInputRef.current.value = "";
       if (fileInputRef.current) fileInputRef.current.value = "";
       
@@ -156,7 +153,30 @@ const MessageInput = () => {
   };
 
   return (
-    <div className="p-4 w-full">
+    <div className="p-4 w-full relative">
+      {/* --- REPLY PREVIEW --- */}
+      {replyingMessage && (
+        <div className="mb-2 flex items-center justify-between bg-base-300/50 p-2 rounded-t-lg border-l-4 border-primary animate-in slide-in-from-bottom-2">
+          <div className="flex items-center gap-2 overflow-hidden">
+            <Reply className="size-4 text-primary shrink-0" />
+            <div className="flex flex-col overflow-hidden text-sm">
+              <span className="font-bold text-primary truncate">
+                Replying to {replyingMessage.senderId?.fullName || "User"}
+              </span>
+              <span className="opacity-70 truncate italic">
+                {replyingMessage.text || (replyingMessage.images?.length > 0 ? "📷 Image" : "📎 File/Voice")}
+              </span>
+            </div>
+          </div>
+          <button 
+            onClick={clearReplyingMessage}
+            className="p-1 hover:bg-base-100 rounded-full transition-colors"
+          >
+            <X className="size-4 text-zinc-400" />
+          </button>
+        </div>
+      )}
+
       {/* Multi-Image Preview */}
       {imagePreviews.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
@@ -176,7 +196,6 @@ const MessageInput = () => {
               </button>
             </div>
           ))}
-          {/* Nút thêm ảnh nhanh nếu chưa đạt giới hạn */}
           {imagePreviews.length < 5 && (
             <button 
               type="button"
@@ -222,7 +241,7 @@ const MessageInput = () => {
         </div>
       )}
 
-      <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+      <form onSubmit={handleSendMessage} className={`flex items-center gap-2 ${replyingMessage ? "rounded-b-lg" : ""}`}>
         <div className="flex-1 flex gap-2">
           <input
             type="text"
@@ -236,7 +255,7 @@ const MessageInput = () => {
           <input
             type="file"
             accept="image/*"
-            multiple // Cho phép chọn nhiều ảnh
+            multiple 
             className="hidden"
             ref={imageInputRef}
             onChange={handleImageChange}

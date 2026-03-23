@@ -6,7 +6,7 @@ import { formatMessageTime } from "../lib/utils";
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import MessageSkeleton from "./skeletons/MessageSkeleton";
-import { Trash2, Video, PhoneMissed, Mic, Phone, FileText, Download, CheckCheck } from "lucide-react"; 
+import { Trash2, Video, PhoneMissed, Mic, Phone, FileText, Download, CheckCheck, Reply } from "lucide-react"; 
 
 const ChatContainer = () => {
   const {
@@ -18,6 +18,7 @@ const ChatContainer = () => {
     unsubscribeFromMessages,
     deleteMessage,
     markAsRead,
+    setReplyingMessage, // Thêm action reply
   } = useChatStore();
   
   const { authUser } = useAuthStore();
@@ -82,7 +83,6 @@ const ChatContainer = () => {
           const displayImages = message.images?.length > 0 ? message.images : (message.image ? [message.image] : []);
           const isLastMessage = index === messages.length - 1;
 
-          // Lọc danh sách người đã xem trong Group (bỏ qua bản thân người gửi)
           const seenByOthers = message.readBy?.filter(read => 
             (read.user?._id || read.user) !== authUser._id
           ) || [];
@@ -115,18 +115,46 @@ const ChatContainer = () => {
                 ${isCallLog ? "bg-base-200 text-base-content border border-base-300 shadow-sm" : ""}
                 ${isFile ? "bg-base-200 text-base-content border border-base-300" : ""}`}
               >
-                {isMyMessage && (
+                {/* ACTIONS: DELETE & REPLY */}
+                <div className={`absolute top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all
+                  ${isMyMessage ? "-left-16" : "-right-16 flex-row-reverse"}`}>
+                  
+                  {isMyMessage && (
+                    <button
+                      onClick={() => {
+                        if (window.confirm("Bạn muốn xoá tin nhắn này?")) {
+                          deleteMessage(message._id);
+                        }
+                      }}
+                      className="p-1.5 text-base-content/50 hover:text-error transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+
                   <button
-                    onClick={() => {
-                      if (window.confirm("Bạn muốn xoá tin nhắn này?")) {
-                        deleteMessage(message._id);
-                      }
-                    }}
-                    className="absolute -left-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 
-                    text-base-content/50 hover:text-error transition-all"
+                    onClick={() => setReplyingMessage(message)}
+                    className="p-1.5 text-base-content/50 hover:text-primary transition-colors"
                   >
-                    <Trash2 size={16} />
+                    <Reply size={16} />
                   </button>
+                </div>
+
+                {/* --- RENDER REPLY CONTENT --- */}
+                {message.replyTo && (
+                  <div className="mb-2 bg-black/10 dark:bg-white/10 p-2 rounded border-l-4 border-primary/50 text-xs overflow-hidden cursor-pointer"
+                    onClick={() => {
+                        const originalMsg = document.getElementById(message.replyTo._id);
+                        originalMsg?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                  >
+                    <p className="font-bold opacity-80 truncate">
+                      {message.replyTo.senderId?.fullName || "Người dùng"}
+                    </p>
+                    <p className="opacity-70 truncate italic">
+                      {message.replyTo.text || (message.replyTo.images?.length > 0 ? "📷 Hình ảnh" : "📎 Tập tin/Âm thanh")}
+                    </p>
+                  </div>
                 )}
 
                 {isCallLog ? (
@@ -144,7 +172,7 @@ const ChatContainer = () => {
                     </div>
                   </div>
                 ) : isFile ? (
-                  <div className="flex flex-col gap-2 p-1">
+                  <div className="flex flex-col gap-2 p-1" id={message._id}>
                     <div className="flex items-center gap-3 bg-base-300/50 p-3 rounded-lg border border-base-content/5 hover:bg-base-300 transition-colors">
                       <div className="p-2 bg-primary/10 text-primary rounded-lg">
                         <FileText size={24} />
@@ -170,7 +198,7 @@ const ChatContainer = () => {
                     {message.text && <p className="text-sm px-1">{message.text}</p>}
                   </div>
                 ) : isVoice ? (
-                  <div className="flex flex-col gap-2 p-1">
+                  <div className="flex flex-col gap-2 p-1" id={message._id}>
                     <div className="flex items-center gap-2 text-primary-content/80">
                       <Mic size={14} />
                       <span className="text-[10px] uppercase font-bold tracking-wider">Voice Message</span>
@@ -179,7 +207,7 @@ const ChatContainer = () => {
                     {message.text && <p className="text-sm mt-1">{message.text}</p>}
                   </div>
                 ) : (
-                  <>
+                  <div id={message._id}>
                     {displayImages.length > 0 && (
                       <div className={`grid gap-1 mb-2 ${
                         displayImages.length === 1 ? "grid-cols-1" : "grid-cols-2"
@@ -199,15 +227,13 @@ const ChatContainer = () => {
                       </div>
                     )}
                     {message.text && <p className="text-sm leading-relaxed">{message.text}</p>}
-                  </>
+                  </div>
                 )}
               </div>
 
-              {/* FOOTER TIN NHẮN: HIỂN THỊ AVATAR ĐÃ XEM (GROUP) HOẶC TEXT (1-1) */}
               <div className="chat-footer opacity-70 flex flex-col items-end mt-1">
                 {isMyMessage && (
                   <>
-                    {/* Chat 1-1 */}
                     {!isGroup && isLastMessage && (
                       <span className="text-[10px] flex items-center gap-1">
                         {message.isRead ? (
@@ -221,7 +247,6 @@ const ChatContainer = () => {
                       </span>
                     )}
 
-                    {/* Chat Group: Hiển thị list avatar những người đã xem */}
                     {isGroup && seenByOthers.length > 0 && (
                       <div className="flex flex-row-reverse items-center gap-0.5 mt-1">
                         {seenByOthers.slice(0, 5).map((read, idx) => (

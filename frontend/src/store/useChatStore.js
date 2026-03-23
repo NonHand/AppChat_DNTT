@@ -33,7 +33,18 @@ export const useChatStore = create((set, get) => ({
     if (get().users.length === 0) set({ isUsersLoading: true });
     try {
       const res = await axiosInstance.get("/messages/users");
-      set({ users: res.data });
+      const users = res.data;
+      set({ users });
+
+      // ĐỒNG BỘ SỐ TIN NHẮN CHƯA ĐỌC TỪ DATABASE (Xử lý lỗi mất count khi offline)
+      const currentCounts = { ...get().unreadCounts };
+      users.forEach((u) => {
+        // Lấy unreadCount từ Backend trả về, nếu không có thì mặc định là 0
+        currentCounts[u._id] = u.unreadCount || 0;
+      });
+      
+      set({ unreadCounts: currentCounts });
+      setStoredUnreadCounts(currentCounts);
     } catch (error) {
       toast.error("Lỗi tải danh sách người dùng");
     } finally {
@@ -45,10 +56,22 @@ export const useChatStore = create((set, get) => ({
     if (get().groups.length === 0) set({ isGroupsLoading: true });
     try {
       const res = await axiosInstance.get("/groups");
-      set({ groups: res.data });
+      const groups = res.data;
+      set({ groups: groups });
+
+      // Đồng bộ unreadCount cho Groups (nếu backend có hỗ trợ)
+      const currentCounts = { ...get().unreadCounts };
+      groups.forEach((g) => {
+        if (g.unreadCount !== undefined) {
+          currentCounts[g._id] = g.unreadCount;
+        }
+      });
+      set({ unreadCounts: currentCounts });
+      setStoredUnreadCounts(currentCounts);
+
       const socket = useAuthStore.getState().socket;
       if (socket) {
-        res.data.forEach((group) => {
+        groups.forEach((group) => {
           socket.emit("joinGroup", group._id);
         });
       }
@@ -143,7 +166,6 @@ export const useChatStore = create((set, get) => ({
       }
     });
 
-    // --- LẮNG NGHE ĐỐI PHƯƠNG/THÀNH VIÊN NHÓM ĐÃ XEM TIN NHẮN ---
     socket.on("messagesRead", (data) => {
       const { selectedUser, messages } = get();
       const { chatId, readBy, isGroup, chatPartnerId } = data;
@@ -174,7 +196,7 @@ export const useChatStore = create((set, get) => ({
     socket.on("newMessage", (newMessage) => {
       const { selectedUser, users, groups, messages, unreadCounts } = get();
       const authUser = useAuthStore.getState().authUser;
-      const { isSoundEnabled } = useAuthStore.getState(); // Lấy trạng thái âm thanh từ AuthStore
+      const { isSoundEnabled } = useAuthStore.getState();
       if (!authUser) return;
 
       const currentChatId = selectedUser?._id?.toString();
@@ -187,17 +209,13 @@ export const useChatStore = create((set, get) => ({
         ? msgGroupId === currentChatId
         : msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId);
 
-      // --- LOGIC THÔNG BÁO ---
       if (msgSenderId !== authUser._id.toString()) {
-        
-        // 1. XỬ LÝ ÂM THANH: Chỉ phát nếu isSoundEnabled là true
         if (isSoundEnabled) {
           const notificationSound = new Audio("/ping.mp3");
           notificationSound.volume = 0.5;
           notificationSound.play().catch(() => {});
         }
 
-        // 2. XỬ LÝ THÔNG BÁO CHỮ TRÊN TAB (Giữ nguyên không đổi)
         if (document.hidden || chatIdOfIncomingMsg !== currentChatId) {
           const originalTitle = "MERN Chat";
           const senderName = newMessage.senderId.fullName || "Ai đó";

@@ -9,16 +9,25 @@ import { decrypt, encrypt } from "../lib/encryption.js";
 export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
+    // Lấy danh sách users khác
     const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
 
-    const usersWithLastMsg = await Promise.all(
+    const usersWithDetails = await Promise.all(
       users.map(async (user) => {
+        // 1. Lấy tin nhắn cuối cùng (giữ nguyên logic cũ của bạn)
         const lastMessage = await Message.findOne({
           $or: [
             { senderId: loggedInUserId, receiverId: user._id },
             { senderId: user._id, receiverId: loggedInUserId },
           ],
         }).sort({ createdAt: -1 }).lean();
+
+        // 2. TÍNH NĂNG MỚI: Đếm số tin nhắn chưa đọc từ user này gửi cho tôi
+        const unreadCount = await Message.countDocuments({
+          senderId: user._id,
+          receiverId: loggedInUserId,
+          isRead: false,
+        });
 
         let processedLastMessage = null;
         if (lastMessage) {
@@ -31,13 +40,15 @@ export const getUsersForSidebar = async (req, res) => {
         return {
           ...user,
           lastMessage: processedLastMessage,
+          unreadCount, // Thêm trường này để frontend hiển thị số đỏ
           lastMsgTime: lastMessage ? lastMessage.createdAt : user.createdAt,
         };
       })
     );
 
-    usersWithLastMsg.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
-    res.status(200).json(usersWithLastMsg);
+    // Sắp xếp theo tin nhắn mới nhất
+    usersWithDetails.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
+    res.status(200).json(usersWithDetails);
   } catch (error) {
     console.error("Error in getUsersForSidebar: ", error.message);
     res.status(500).json({ error: "Internal server error" });
@@ -61,7 +72,7 @@ export const getMessages = async (req, res) => {
 
       messages = await Message.find({ groupId: chatPartnerId })
         .populate("senderId", "fullName profilePic")
-        .populate("readBy.user", "fullName profilePic") // Lấy thông tin người đã xem
+        .populate("readBy.user", "fullName profilePic") 
         .sort({ createdAt: 1 });
 
       // Phát socket báo cho mọi người trong group rằng mình đã xem
@@ -163,7 +174,7 @@ export const sendMessage = async (req, res) => {
 
     if (isGroup) {
       newMessageData.groupId = receiverOrGroupId;
-      newMessageData.readBy = [{ user: senderId }]; // Đổi userId thành user theo model mới
+      newMessageData.readBy = [{ user: senderId }];
     } else {
       newMessageData.receiverId = receiverOrGroupId;
     }
@@ -171,13 +182,12 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
-    // Populate sender info để client hiển thị ngay
     const populatedMessage = await Message.findById(newMessage._id)
       .populate("senderId", "fullName profilePic")
       .populate("readBy.user", "fullName profilePic");
 
     const messageToSend = populatedMessage.toObject();
-    messageToSend.text = text; // Gửi text đã giải mã cho socket
+    messageToSend.text = text; 
 
     if (isGroup) {
       io.to(receiverOrGroupId).emit("newMessage", messageToSend);
@@ -247,7 +257,6 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Xử lý xóa file trên Cloudinary (giữ nguyên logic của bạn)
     if (message.images && message.images.length > 0) {
       const deletePromises = message.images.map((img) => {
         const parts = img.split("/");

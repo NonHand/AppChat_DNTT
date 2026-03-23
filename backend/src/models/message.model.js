@@ -1,25 +1,24 @@
-import mongoose from "mongoose";
+import { Schema, model } from "mongoose";
 
-const messageSchema = new mongoose.Schema(
+const messageSchema = new Schema(
   {
     senderId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
     },
     receiverId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       ref: "User",
-      required: false,
+      required: false, // Dùng false vì có thể là tin nhắn nhóm
     },
     groupId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       ref: "Group",
       default: null,
     },
     messageType: {
       type: String,
-      // Đã cập nhật đầy đủ các loại để khớp với controller
       enum: ["text", "image", "video_call", "voice", "file", "call"], 
       default: "text",
     },
@@ -28,10 +27,10 @@ const messageSchema = new mongoose.Schema(
     },
     // --- PHẦN HÌNH ẢNH ---
     image: {
-      type: String, // Lưu ảnh đầu tiên hoặc ảnh đơn lẻ (tương thích cũ)
+      type: String, // Lưu ảnh đơn lẻ (tương thích cũ)
     },
     images: {
-      type: [String], // Mảng lưu trữ nhiều ảnh cùng lúc (tính năng mới)
+      type: [String], // Mảng lưu trữ nhiều ảnh (tính năng mới)
       default: [],
     },
     // ---------------------
@@ -50,6 +49,19 @@ const messageSchema = new mongoose.Schema(
       type: Number, 
       default: null,
     },
+
+    // --- TRẠNG THÁI ĐÃ XEM (MỚI THÊM) ---
+    isRead: {
+      type: Boolean,
+      default: false, // Dùng cho chat 1-1
+    },
+    readBy: [
+      {
+        userId: { type: Schema.Types.ObjectId, ref: "User" },
+        readAt: { type: Date, default: Date.now },
+      }
+    ], // Dùng cho chat Group (ai đã xem vào lúc nào)
+    // ----------------------------------
 
     // --- CẤU TRÚC CUỘC GỌI TẬP TRUNG ---
     callDetails: {
@@ -84,7 +96,9 @@ const messageSchema = new mongoose.Schema(
 // Index giúp truy vấn lịch sử chat nhanh hơn
 messageSchema.index({ groupId: 1, createdAt: -1 });
 messageSchema.index({ senderId: 1, receiverId: 1, createdAt: -1 });
+// Index cho tính năng tìm kiếm tin nhắn chưa đọc
+messageSchema.index({ receiverId: 1, isRead: 1 });
 
-const Message = mongoose.model("Message", messageSchema);
+const Message = model("Message", messageSchema);
 
 export default Message;

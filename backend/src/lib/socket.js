@@ -37,6 +37,22 @@ io.on("connection", (socket) => {
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
   // ==========================================
+  // LOGIC ĐÃ XEM (SEEN RECEIPTS) - MỚI THÊM
+  // ==========================================
+  
+  // Khi người dùng mở chat, FE sẽ emit sự kiện này
+  socket.on("markAsRead", ({ senderId, receiverId }) => {
+    const senderSocketId = getReceiverSocketId(senderId);
+    if (senderSocketId) {
+      // Báo cho người gửi biết rằng người nhận đã xem
+      io.to(senderSocketId).emit("messagesRead", {
+        chatPartnerId: receiverId, // ID của người vừa xem tin nhắn
+        readBy: receiverId
+      });
+    }
+  });
+
+  // ==========================================
   // LOGIC VIDEO CALL (WEBRTC SIGNALING)
   // ==========================================
 
@@ -53,8 +69,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 2. Xử lý khi máy nhận đang bận (Mới thêm)
-  // Được gọi từ FE khi người dùng đang trong callAccepted hoặc isCalling
+  // 2. Xử lý khi máy nhận đang bận
   socket.on("call-busy", ({ to }) => {
     const callerSocketId = getReceiverSocketId(to);
     if (callerSocketId) {
@@ -85,16 +100,13 @@ io.on("connection", (socket) => {
   socket.on("endCall", async ({ to, duration, senderId }) => {
     const targetSocketId = userSocketMap[to] || to;
     
-    // Gửi tín hiệu cúp máy cho đối phương ngay lập tức
     if (targetSocketId) {
       io.to(targetSocketId).emit("endCall");
     }
 
-    // Lưu vào Database
     try {
       if (senderId && to) {
         let receiverUserId = to;
-        // Kiểm tra nếu 'to' đang là socketId thì chuyển về UserId
         for (const [uId, sId] of Object.entries(userSocketMap)) {
           if (sId === to) {
             receiverUserId = uId;
@@ -115,7 +127,6 @@ io.on("connection", (socket) => {
 
         await callMessage.save();
 
-        // Cập nhật tin nhắn cho cả 2 bên
         const receiverSocketId = getReceiverSocketId(receiverUserId);
         const senderSocketId = getReceiverSocketId(senderId);
 
@@ -128,7 +139,7 @@ io.on("connection", (socket) => {
   });
 
   // ==========================================
-  // LOGIC CHAT NHÓM (Giữ nguyên)
+  // LOGIC CHAT NHÓM
   // ==========================================
   socket.on("joinGroup", (groupId) => {
     socket.join(groupId);

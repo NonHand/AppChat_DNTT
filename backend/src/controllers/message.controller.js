@@ -56,6 +56,12 @@ export const getMessages = async (req, res) => {
       messages = await Message.find({ groupId: chatPartnerId })
         .populate("senderId", "fullName profilePic")
         .sort({ createdAt: 1 });
+      
+      // Đánh dấu đã xem cho Group (thêm mình vào mảng readBy nếu chưa có)
+      await Message.updateMany(
+        { groupId: chatPartnerId, "readBy.userId": { $ne: myId } },
+        { $push: { readBy: { userId: myId } } }
+      );
     } else {
       messages = await Message.find({
         $or: [
@@ -63,6 +69,21 @@ export const getMessages = async (req, res) => {
           { senderId: chatPartnerId, receiverId: myId },
         ],
       }).sort({ createdAt: 1 });
+
+      // Tự động đánh dấu đã xem khi lấy tin nhắn cá nhân
+      await Message.updateMany(
+        { senderId: chatPartnerId, receiverId: myId, isRead: false },
+        { isRead: true }
+      );
+
+      // Thông báo cho đối phương qua socket rằng mình đã đọc
+      const receiverSocketId = getReceiverSocketId(chatPartnerId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("messagesRead", {
+          readBy: myId,
+          chatPartnerId: myId, // Chính là mình
+        });
+      }
     }
 
     const decryptedMessages = messages.map((msg) => {
@@ -80,29 +101,22 @@ export const getMessages = async (req, res) => {
   }
 };
 
-// --- HÀM SEND MESSAGE: HỖ TRỢ GỬI NHIỀU ẢNH ---
 export const sendMessage = async (req, res) => {
   try {
     const { text, image, images, audio, file, fileName, fileSize } = req.body;
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
-    // 1. Xử lý Upload Ảnh (Hỗ trợ cả đơn lẻ 'image' cũ và mảng 'images' mới)
     let imageUrls = [];
-    
-    // Nếu gửi mảng nhiều ảnh
     if (images && Array.isArray(images) && images.length > 0) {
       const uploadPromises = images.map((img) => cloudinary.uploader.upload(img));
       const uploadResponses = await Promise.all(uploadPromises);
       imageUrls = uploadResponses.map((res) => res.secure_url);
-    } 
-    // Nếu gửi 1 ảnh duy nhất (giữ logic cũ cho mobile/các version cũ)
-    else if (image) {
+    } else if (image) {
       const uploadResponse = await cloudinary.uploader.upload(image);
       imageUrls = [uploadResponse.secure_url];
     }
 
-    // 2. Xử lý Audio
     let audioUrl;
     if (audio) {
       const uploadResponse = await cloudinary.uploader.upload(audio, {
@@ -112,7 +126,6 @@ export const sendMessage = async (req, res) => {
       audioUrl = uploadResponse.secure_url;
     }
 
-    // 3. Xử lý File tài liệu
     let fileUrl;
     if (file) {
       const uploadResponse = await cloudinary.uploader.upload(file, {
@@ -123,14 +136,11 @@ export const sendMessage = async (req, res) => {
     }
 
     const isGroup = await Group.exists({ _id: receiverOrGroupId });
-
-    // 4. Mã hóa nội dung văn bản
     const encryptedText = text ? encrypt(text) : text;
 
     const newMessageData = {
       senderId,
       text: encryptedText,
-      // Lưu ảnh vào cả trường đơn lẻ (ảnh đầu tiên) và trường mảng (tất cả ảnh)
       image: imageUrls.length > 0 ? imageUrls[0] : null, 
       images: imageUrls, 
       audio: audioUrl,
@@ -138,10 +148,12 @@ export const sendMessage = async (req, res) => {
       fileName: fileName,
       fileSize: fileSize,
       messageType: fileUrl ? "file" : audio ? "voice" : imageUrls.length > 0 ? "image" : "text",
+      isRead: false, // Mặc định là chưa đọc
     };
 
     if (isGroup) {
       newMessageData.groupId = receiverOrGroupId;
+      newMessageData.readBy = [{ userId: senderId }]; // Người gửi mặc định đã xem
     } else {
       newMessageData.receiverId = receiverOrGroupId;
     }
@@ -149,7 +161,6 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
-    // 5. Chuẩn bị dữ liệu gửi Realtime (Bản rõ để hiển thị ngay)
     const messageToSend = newMessage.toObject();
     messageToSend.text = text; 
 
@@ -169,6 +180,32 @@ export const sendMessage = async (req, res) => {
   }
 };
 
+// --- HÀM MỚI: ĐÁNH DẤU ĐÃ XEM THỦ CÔNG ---
+export const markMessagesAsRead = async (req, res) => {
+  try {
+    const { id: senderId } = req.params;
+    const myId = req.user._id;
+
+    await Message.updateMany(
+      { senderId, receiverId: myId, isRead: false },
+      { isRead: true }
+    );
+
+    const receiverSocketId = getReceiverSocketId(senderId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("messagesRead", {
+        readBy: myId,
+        chatPartnerId: myId,
+      });
+    }
+
+    res.status(200).json({ message: "Messages marked as read" });
+  } catch (error) {
+    console.error("Error in markMessagesAsRead: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 export const deleteMessage = async (req, res) => {
   try {
     const { id: messageId } = req.params;
@@ -180,7 +217,6 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Xóa nhiều ảnh trên Cloudinary
     if (message.images && message.images.length > 0) {
       const deletePromises = message.images.map((img) => {
         const publicId = img.split("/").pop().split(".")[0];
@@ -262,6 +298,7 @@ export const saveCallNotification = async (req, res) => {
       duration: duration || "00:00",
       callType: callType || "video",
       messageType: "call",
+      isRead: false,
     });
 
     await newMessage.save();

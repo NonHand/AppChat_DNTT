@@ -6,7 +6,8 @@ import {
   sendMessage, 
   deleteMessage, 
   clearChat,
-  saveCallNotification // Thêm hàm này vào để xử lý thông báo cuộc gọi
+  saveCallNotification,
+  markMessagesAsRead // Import hàm mới để xử lý trạng thái đã xem
 } from "../controllers/message.controller.js";
 
 const router = express.Router();
@@ -17,10 +18,13 @@ router.get("/users", protectRoute, getUsersForSidebar);
 // Lấy lịch sử tin nhắn với một người dùng hoặc nhóm cụ thể
 router.get("/:id", protectRoute, getMessages);
 
-// Gửi tin nhắn mới (văn bản, hình ảnh, audio)
+// Gửi tin nhắn mới (văn bản, hình ảnh, audio, file)
 router.post("/send/:id", protectRoute, sendMessage);
 
-// Route mới: Lưu thông báo kết thúc cuộc gọi và bắn Socket Realtime
+// Đánh dấu tất cả tin nhắn từ một người dùng cụ thể là đã đọc
+router.put("/read/:id", protectRoute, markMessagesAsRead);
+
+// Route: Lưu thông báo kết thúc cuộc gọi và bắn Socket Realtime
 router.post("/call-notification/:id", protectRoute, saveCallNotification);
 
 // Xóa một tin nhắn cụ thể

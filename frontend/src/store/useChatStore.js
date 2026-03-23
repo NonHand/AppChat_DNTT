@@ -24,13 +24,13 @@ export const useChatStore = create((set, get) => ({
   users: [],
   groups: [],
   selectedUser: null,
-  unreadCounts: getStoredUnreadCounts(), 
+  unreadCounts: getStoredUnreadCounts(),
   isUsersLoading: false,
   isMessagesLoading: false,
   isGroupsLoading: false,
 
   getUsers: async () => {
-    if (get().users.length === 0) set({ isUsersLoading: true }); 
+    if (get().users.length === 0) set({ isUsersLoading: true });
     try {
       const res = await axiosInstance.get("/messages/users");
       set({ users: res.data });
@@ -48,7 +48,7 @@ export const useChatStore = create((set, get) => ({
       set({ groups: res.data });
       const socket = useAuthStore.getState().socket;
       if (socket) {
-        res.data.forEach(group => {
+        res.data.forEach((group) => {
           socket.emit("joinGroup", group._id);
         });
       }
@@ -64,6 +64,7 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.get(`/messages/${chatId}`);
       set({ messages: res.data });
+      // Khi lấy tin nhắn, tự động đánh dấu đã xem
       get().markAsRead(chatId);
     } catch (error) {
       toast.error(error.response?.data?.message || "Lỗi tải tin nhắn");
@@ -80,14 +81,14 @@ export const useChatStore = create((set, get) => ({
       set({ messages: [...messages, newMessage] });
 
       if (newMessage.groupId) {
-        const updatedGroups = groups.map(g => 
-          g._id === newMessage.groupId ? { ...g, lastMessage: newMessage } : g
-        ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
+        const updatedGroups = groups
+          .map((g) => (g._id === newMessage.groupId ? { ...g, lastMessage: newMessage } : g))
+          .sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
         set({ groups: updatedGroups });
       } else {
-        const updatedUsers = users.map(u => 
-          u._id === selectedUser._id ? { ...u, lastMessage: newMessage } : u
-        ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
+        const updatedUsers = users
+          .map((u) => (u._id === selectedUser._id ? { ...u, lastMessage: newMessage } : u))
+          .sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
         set({ users: updatedUsers });
       }
       return newMessage;
@@ -111,10 +112,10 @@ export const useChatStore = create((set, get) => ({
         set({ messages: [...messages, newMessage] });
       }
 
-      const updatedUsers = users.map(u => 
-        u._id === receiverId ? { ...u, lastMessage: newMessage } : u
-      ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
-      
+      const updatedUsers = users
+        .map((u) => (u._id === receiverId ? { ...u, lastMessage: newMessage } : u))
+        .sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
+
       set({ users: updatedUsers });
       return newMessage;
     } catch (error) {
@@ -128,6 +129,8 @@ export const useChatStore = create((set, get) => ({
 
     socket.off("newGroupCreated");
     socket.off("newMessage");
+    socket.off("messagesRead");
+    socket.off("messageDeleted");
 
     socket.on("newGroupCreated", (newGroup) => {
       const { groups } = get();
@@ -140,6 +143,21 @@ export const useChatStore = create((set, get) => ({
       }
     });
 
+    // --- LẮNG NGHE ĐỐI PHƯƠNG ĐÃ XEM TIN NHẮN ---
+    socket.on("messagesRead", ({ chatPartnerId }) => {
+      const { selectedUser, messages } = get();
+      // Nếu đang mở đúng tab chat với người vừa xem
+      if (selectedUser?._id === chatPartnerId) {
+        const updatedMessages = messages.map((m) => ({ ...m, isRead: true }));
+        set({ messages: updatedMessages });
+      }
+    });
+
+    // --- LẮNG NGHE KHI TIN NHẮN BỊ XOÁ (THU HỒI) ---
+    socket.on("messageDeleted", (messageId) => {
+      set({ messages: get().messages.filter((m) => m._id !== messageId) });
+    });
+
     socket.on("newMessage", (newMessage) => {
       const { selectedUser, users, groups, messages, unreadCounts } = get();
       const authUser = useAuthStore.getState().authUser;
@@ -149,34 +167,29 @@ export const useChatStore = create((set, get) => ({
       const msgGroupId = newMessage.groupId?.toString();
       const msgSenderId = (newMessage.senderId._id || newMessage.senderId).toString();
       const msgReceiverId = newMessage.receiverId?.toString();
-      
-      const chatIdOfIncomingMsg = msgGroupId || msgSenderId;
-      const isChatRelevant = msgGroupId 
-        ? msgGroupId === currentChatId 
-        : (msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId));
 
-      // --- LOGIC THÔNG BÁO (PING & TAB TITLE) ---
+      const chatIdOfIncomingMsg = msgGroupId || msgSenderId;
+      const isChatRelevant = msgGroupId
+        ? msgGroupId === currentChatId
+        : msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId);
+
+      // --- LOGIC THÔNG BÁO ---
       if (msgSenderId !== authUser._id.toString()) {
-        // 1. Phát âm thanh Ping
         const notificationSound = new Audio("/ping.mp3");
         notificationSound.volume = 0.5;
         notificationSound.play().catch(() => {});
 
-        // 2. Thông báo trên tiêu đề Tab
         if (document.hidden || chatIdOfIncomingMsg !== currentChatId) {
           const originalTitle = "MERN Chat";
           const senderName = newMessage.senderId.fullName || "Ai đó";
 
-          // Xóa Interval cũ nếu đang chạy để tránh chồng chéo
           if (flashTitleInterval) clearInterval(flashTitleInterval);
-
           let isFlash = false;
           flashTitleInterval = setInterval(() => {
             document.title = isFlash ? originalTitle : `🔔 Tin nhắn từ ${senderName}...`;
             isFlash = !isFlash;
           }, 1000);
 
-          // Tự động dọn dẹp khi người dùng quay lại Tab (focus)
           const cleanUp = () => {
             clearInterval(flashTitleInterval);
             flashTitleInterval = null;
@@ -187,13 +200,16 @@ export const useChatStore = create((set, get) => ({
         }
       }
 
+      // Nếu đang mở chat và nhận tin từ người đó -> Tự động đánh dấu đã xem ngay
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
-        const isExisted = messages.some(m => m._id === newMessage._id);
+        const isExisted = messages.some((m) => m._id === newMessage._id);
         if (!isExisted) {
           set({ messages: [...messages, newMessage] });
         }
-      } 
-      
+        // Gọi API báo đã xem ngay lập tức vì đang mở tab chat
+        get().markAsRead(chatIdOfIncomingMsg);
+      }
+
       if (msgSenderId !== authUser._id.toString() && chatIdOfIncomingMsg !== currentChatId) {
         const newCounts = {
           ...unreadCounts,
@@ -203,27 +219,47 @@ export const useChatStore = create((set, get) => ({
         setStoredUnreadCounts(newCounts);
       }
 
+      // Cập nhật tin nhắn cuối cùng (Last Message)
       if (msgGroupId) {
-        const updatedGroups = groups.map((g) => 
-          g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g
-        ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
+        const updatedGroups = groups
+          .map((g) => (g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g))
+          .sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
         set({ groups: updatedGroups });
       } else {
         const partnerId = msgSenderId === authUser._id.toString() ? msgReceiverId : msgSenderId;
-        const updatedUsers = users.map((u) => 
-          u._id.toString() === partnerId ? { ...u, lastMessage: newMessage } : u
-        ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
+        const updatedUsers = users
+          .map((u) => (u._id.toString() === partnerId ? { ...u, lastMessage: newMessage } : u))
+          .sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
         set({ users: updatedUsers });
       }
     });
   },
 
-  markAsRead: (chatId) => {
-    const { unreadCounts } = get();
-    if (unreadCounts[chatId]) {
-      const newCounts = { ...unreadCounts, [chatId]: 0 };
-      set({ unreadCounts: newCounts });
-      setStoredUnreadCounts(newCounts);
+  markAsRead: async (chatId) => {
+    const { unreadCounts, selectedUser } = get();
+    const socket = useAuthStore.getState().socket;
+    const authUser = useAuthStore.getState().authUser;
+
+    try {
+      // 1. Cập nhật Local State (Số tin nhắn chưa đọc trên Sidebar)
+      if (unreadCounts[chatId]) {
+        const newCounts = { ...unreadCounts, [chatId]: 0 };
+        set({ unreadCounts: newCounts });
+        setStoredUnreadCounts(newCounts);
+      }
+
+      // 2. Gọi API Backend để cập nhật DB
+      await axiosInstance.put(`/messages/read/${chatId}`);
+
+      // 3. Emit Socket báo cho đối phương biết mình đã đọc
+      if (socket && authUser) {
+        socket.emit("markAsRead", {
+          senderId: chatId, // ID của người gửi tin nhắn cho mình
+          receiverId: authUser._id, // ID của mình
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi đánh dấu đã xem:", error);
     }
   },
 
@@ -239,6 +275,8 @@ export const useChatStore = create((set, get) => ({
     const socket = useAuthStore.getState().socket;
     if (!socket) return;
     socket.off("newMessage");
+    socket.off("messagesRead");
+    socket.off("messageDeleted");
   },
 
   createGroup: async (groupData) => {

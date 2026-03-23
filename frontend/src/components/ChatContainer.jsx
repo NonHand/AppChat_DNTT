@@ -6,7 +6,7 @@ import { formatMessageTime } from "../lib/utils";
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import MessageSkeleton from "./skeletons/MessageSkeleton";
-import { Trash2, Video, PhoneMissed, Mic, Phone, FileText, Download } from "lucide-react"; 
+import { Trash2, Video, PhoneMissed, Mic, Phone, FileText, Download, CheckCheck } from "lucide-react"; 
 
 const ChatContainer = () => {
   const {
@@ -17,6 +17,7 @@ const ChatContainer = () => {
     subscribeToMessages,
     unsubscribeFromMessages,
     deleteMessage,
+    markAsRead, // Lấy thêm hàm markAsRead từ store
   } = useChatStore();
   
   const { authUser } = useAuthStore();
@@ -29,11 +30,22 @@ const ChatContainer = () => {
     return () => unsubscribeFromMessages();
   }, [selectedUser._id, getMessages, subscribeToMessages, unsubscribeFromMessages]);
 
+  // Cuộn xuống khi có tin nhắn mới
   useEffect(() => {
     if (messageEndRef.current && messages) {
       messageEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages]);
+    
+    // Logic: Nếu tin nhắn cuối cùng là của đối phương gửi cho mình, tự động markAsRead
+    if (messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      const isIncoming = lastMessage.senderId === selectedUser._id || lastMessage.senderId?._id === selectedUser._id;
+      
+      if (isIncoming && !lastMessage.isRead) {
+        markAsRead(selectedUser._id);
+      }
+    }
+  }, [messages, selectedUser._id, markAsRead]);
 
   if (isMessagesLoading) {
     return (
@@ -52,7 +64,7 @@ const ChatContainer = () => {
       <ChatHeader />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => {
+        {messages.map((message, index) => {
           const isMyMessage = message.senderId === authUser._id || message.senderId?._id === authUser._id;
           
           const displayAvatar = isMyMessage 
@@ -69,9 +81,11 @@ const ChatContainer = () => {
           const isMissed = message.duration === "00:00" || message.callDetails?.status === "missed";
           const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call" || message.messageType === "video_call";
 
-          // Logic xử lý mảng ảnh để hiển thị Grid
           const hasMultipleImages = message.images && message.images.length > 0;
           const displayImages = hasMultipleImages ? message.images : (message.image ? [message.image] : []);
+
+          // Kiểm tra xem đây có phải tin nhắn cuối cùng của mình không để hiện "Đã xem"
+          const isLastMessage = index === messages.length - 1;
 
           return (
             <div
@@ -92,7 +106,7 @@ const ChatContainer = () => {
                 {isGroup && !isMyMessage && (
                   <span className="text-xs font-bold mb-1">{displayName}</span>
                 )}
-                <time className="text-xs opacity-50 px-1">
+                <time className="text-[10px] opacity-50 px-1">
                   {formatMessageTime(message.createdAt)}
                 </time>
               </div>
@@ -166,12 +180,9 @@ const ChatContainer = () => {
                   </div>
                 ) : (
                   <>
-                    {/* HIỂN THỊ ẢNH (HỖ TRỢ NHIỀU ẢNH DẠNG GRID) */}
                     {displayImages.length > 0 && (
                       <div className={`grid gap-1 mb-2 ${
-                        displayImages.length === 1 ? "grid-cols-1" : 
-                        displayImages.length === 2 ? "grid-cols-2" : 
-                        "grid-cols-2"
+                        displayImages.length === 1 ? "grid-cols-1" : "grid-cols-2"
                       }`}>
                         {displayImages.map((img, idx) => (
                           <img
@@ -189,6 +200,22 @@ const ChatContainer = () => {
                     )}
                     {message.text && <p className="text-sm leading-relaxed">{message.text}</p>}
                   </>
+                )}
+              </div>
+
+              {/* FOOTER TIN NHẮN: HIỂN THỊ TRẠNG THÁI ĐÃ XEM */}
+              <div className="chat-footer opacity-70 flex items-center gap-1 mt-1">
+                {isMyMessage && isLastMessage && (
+                  <span className="text-[10px] flex items-center gap-1">
+                    {message.isRead ? (
+                      <>
+                        <CheckCheck size={12} className="text-blue-500" />
+                        <span className="text-blue-500 font-medium">Đã xem</span>
+                      </>
+                    ) : (
+                      "Đã gửi"
+                    )}
+                  </span>
                 )}
               </div>
             </div>

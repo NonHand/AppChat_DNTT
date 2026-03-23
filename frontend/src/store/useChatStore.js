@@ -143,11 +143,28 @@ export const useChatStore = create((set, get) => ({
       }
     });
 
-    // --- LẮNG NGHE ĐỐI PHƯƠNG ĐÃ XEM TIN NHẮN ---
-    socket.on("messagesRead", ({ chatPartnerId }) => {
+    // --- LẮNG NGHE ĐỐI PHƯƠNG/THÀNH VIÊN NHÓM ĐÃ XEM TIN NHẮN ---
+    socket.on("messagesRead", (data) => {
       const { selectedUser, messages } = get();
-      // Nếu đang mở đúng tab chat với người vừa xem
-      if (selectedUser?._id === chatPartnerId) {
+      const { chatId, readBy, isGroup, chatPartnerId } = data;
+
+      // Xử lý cho Group
+      if (isGroup && selectedUser?._id === chatId) {
+        const updatedMessages = messages.map((msg) => {
+          // Kiểm tra xem user này đã có trong danh sách readBy chưa
+          const alreadyRead = msg.readBy?.some(r => (r.user?._id || r.user) === readBy._id);
+          if (!alreadyRead) {
+            return {
+              ...msg,
+              readBy: [...(msg.readBy || []), { user: readBy, readAt: new Date() }]
+            };
+          }
+          return msg;
+        });
+        set({ messages: updatedMessages });
+      } 
+      // Xử lý cho Chat 1-1
+      else if (!isGroup && selectedUser?._id === chatPartnerId) {
         const updatedMessages = messages.map((m) => ({ ...m, isRead: true }));
         set({ messages: updatedMessages });
       }
@@ -253,9 +270,12 @@ export const useChatStore = create((set, get) => ({
 
       // 3. Emit Socket báo cho đối phương biết mình đã đọc
       if (socket && authUser) {
+        const isGroup = !!selectedUser?.members;
         socket.emit("markAsRead", {
-          senderId: chatId, // ID của người gửi tin nhắn cho mình
-          receiverId: authUser._id, // ID của mình
+          chatId: chatId,
+          senderId: chatId, // Cho chat 1-1
+          receiverId: authUser._id,
+          isGroup: isGroup
         });
       }
     } catch (error) {
@@ -267,7 +287,7 @@ export const useChatStore = create((set, get) => ({
     const { selectedUser } = get();
     if (!selectedUser) return;
     const socket = useAuthStore.getState().socket;
-    if (selectedUser.members) socket.emit("joinGroup", selectedUser._id);
+    if (socket && selectedUser.members) socket.emit("joinGroup", selectedUser._id);
     get().subscribeToChatUpdates();
   },
 

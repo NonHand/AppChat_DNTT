@@ -50,17 +50,18 @@ const messageSchema = new Schema(
       default: null,
     },
 
-    // --- TRẠNG THÁI ĐÃ XEM (MỚI THÊM) ---
+    // --- TRẠNG THÁI ĐÃ XEM ---
     isRead: {
       type: Boolean,
-      default: false, // Dùng cho chat 1-1
+      default: false, // Dùng chủ yếu cho chat 1-1
     },
+    // Cấu trúc readBy dùng cho Group để biết chính xác những ai đã đọc
     readBy: [
       {
-        userId: { type: Schema.Types.ObjectId, ref: "User" },
+        user: { type: Schema.Types.ObjectId, ref: "User" },
         readAt: { type: Date, default: Date.now },
       }
-    ], // Dùng cho chat Group (ai đã xem vào lúc nào)
+    ], 
     // ----------------------------------
 
     // --- CẤU TRÚC CUỘC GỌI TẬP TRUNG ---
@@ -80,7 +81,7 @@ const messageSchema = new Schema(
         default: "video"
       }
     },
-    // Hỗ trợ trường duration dạng chuỗi nếu controller cũ vẫn dùng (ví dụ: "00:15")
+    // Hỗ trợ các trường tương thích cũ
     duration: {
       type: String,
       default: null
@@ -96,8 +97,10 @@ const messageSchema = new Schema(
 // Index giúp truy vấn lịch sử chat nhanh hơn
 messageSchema.index({ groupId: 1, createdAt: -1 });
 messageSchema.index({ senderId: 1, receiverId: 1, createdAt: -1 });
-// Index cho tính năng tìm kiếm tin nhắn chưa đọc
+
+// Index cho tính năng tìm kiếm tin nhắn chưa đọc và hiển thị trạng thái
 messageSchema.index({ receiverId: 1, isRead: 1 });
+messageSchema.index({ "readBy.user": 1 }); // Index cho mảng readBy trong Group
 
 const Message = model("Message", messageSchema);
 

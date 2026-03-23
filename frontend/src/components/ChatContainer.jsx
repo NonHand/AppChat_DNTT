@@ -17,7 +17,7 @@ const ChatContainer = () => {
     subscribeToMessages,
     unsubscribeFromMessages,
     deleteMessage,
-    markAsRead, // Lấy thêm hàm markAsRead từ store
+    markAsRead,
   } = useChatStore();
   
   const { authUser } = useAuthStore();
@@ -30,13 +30,11 @@ const ChatContainer = () => {
     return () => unsubscribeFromMessages();
   }, [selectedUser._id, getMessages, subscribeToMessages, unsubscribeFromMessages]);
 
-  // Cuộn xuống khi có tin nhắn mới
   useEffect(() => {
     if (messageEndRef.current && messages) {
       messageEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
     
-    // Logic: Nếu tin nhắn cuối cùng là của đối phương gửi cho mình, tự động markAsRead
     if (messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
       const isIncoming = lastMessage.senderId === selectedUser._id || lastMessage.senderId?._id === selectedUser._id;
@@ -81,11 +79,13 @@ const ChatContainer = () => {
           const isMissed = message.duration === "00:00" || message.callDetails?.status === "missed";
           const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call" || message.messageType === "video_call";
 
-          const hasMultipleImages = message.images && message.images.length > 0;
-          const displayImages = hasMultipleImages ? message.images : (message.image ? [message.image] : []);
-
-          // Kiểm tra xem đây có phải tin nhắn cuối cùng của mình không để hiện "Đã xem"
+          const displayImages = message.images?.length > 0 ? message.images : (message.image ? [message.image] : []);
           const isLastMessage = index === messages.length - 1;
+
+          // Lọc danh sách người đã xem trong Group (bỏ qua bản thân người gửi)
+          const seenByOthers = message.readBy?.filter(read => 
+            (read.user?._id || read.user) !== authUser._id
+          ) || [];
 
           return (
             <div
@@ -203,19 +203,46 @@ const ChatContainer = () => {
                 )}
               </div>
 
-              {/* FOOTER TIN NHẮN: HIỂN THỊ TRẠNG THÁI ĐÃ XEM */}
-              <div className="chat-footer opacity-70 flex items-center gap-1 mt-1">
-                {isMyMessage && isLastMessage && (
-                  <span className="text-[10px] flex items-center gap-1">
-                    {message.isRead ? (
-                      <>
-                        <CheckCheck size={12} className="text-blue-500" />
-                        <span className="text-blue-500 font-medium">Đã xem</span>
-                      </>
-                    ) : (
-                      "Đã gửi"
+              {/* FOOTER TIN NHẮN: HIỂN THỊ AVATAR ĐÃ XEM (GROUP) HOẶC TEXT (1-1) */}
+              <div className="chat-footer opacity-70 flex flex-col items-end mt-1">
+                {isMyMessage && (
+                  <>
+                    {/* Chat 1-1 */}
+                    {!isGroup && isLastMessage && (
+                      <span className="text-[10px] flex items-center gap-1">
+                        {message.isRead ? (
+                          <>
+                            <CheckCheck size={12} className="text-blue-500" />
+                            <span className="text-blue-500 font-medium">Đã xem</span>
+                          </>
+                        ) : (
+                          "Đã gửi"
+                        )}
+                      </span>
                     )}
-                  </span>
+
+                    {/* Chat Group: Hiển thị list avatar những người đã xem */}
+                    {isGroup && seenByOthers.length > 0 && (
+                      <div className="flex flex-row-reverse items-center gap-0.5 mt-1">
+                        {seenByOthers.slice(0, 5).map((read, idx) => (
+                          <div 
+                            key={read.user?._id || idx} 
+                            className="tooltip tooltip-left" 
+                            data-tip={read.user?.fullName || "Thành viên"}
+                          >
+                            <img
+                              src={read.user?.profilePic || "/avatar.png"}
+                              className="size-4 rounded-full border border-base-100 object-cover shadow-sm"
+                              alt="seen by"
+                            />
+                          </div>
+                        ))}
+                        {seenByOthers.length > 5 && (
+                          <span className="text-[9px] mr-1">+{seenByOthers.length - 5}</span>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>

@@ -53,22 +53,33 @@ export const getMessages = async (req, res) => {
 
     let messages;
     if (isGroup) {
+      // Đánh dấu mình đã xem các tin nhắn trong group trước khi lấy dữ liệu
+      await Message.updateMany(
+        { groupId: chatPartnerId, "readBy.user": { $ne: myId } },
+        { $push: { readBy: { user: myId } } }
+      );
+
       messages = await Message.find({ groupId: chatPartnerId })
         .populate("senderId", "fullName profilePic")
+        .populate("readBy.user", "fullName profilePic") // Lấy thông tin người đã xem
         .sort({ createdAt: 1 });
-      
-      // Đánh dấu đã xem cho Group (thêm mình vào mảng readBy nếu chưa có)
-      await Message.updateMany(
-        { groupId: chatPartnerId, "readBy.userId": { $ne: myId } },
-        { $push: { readBy: { userId: myId } } }
-      );
+
+      // Phát socket báo cho mọi người trong group rằng mình đã xem
+      io.to(chatPartnerId).emit("messagesRead", {
+        chatId: chatPartnerId,
+        readBy: await User.findById(myId).select("fullName profilePic"),
+        isGroup: true
+      });
+
     } else {
       messages = await Message.find({
         $or: [
           { senderId: myId, receiverId: chatPartnerId },
           { senderId: chatPartnerId, receiverId: myId },
         ],
-      }).sort({ createdAt: 1 });
+      })
+      .populate("readBy.user", "fullName profilePic")
+      .sort({ createdAt: 1 });
 
       // Tự động đánh dấu đã xem khi lấy tin nhắn cá nhân
       await Message.updateMany(
@@ -76,12 +87,11 @@ export const getMessages = async (req, res) => {
         { isRead: true }
       );
 
-      // Thông báo cho đối phương qua socket rằng mình đã đọc
       const receiverSocketId = getReceiverSocketId(chatPartnerId);
       if (receiverSocketId) {
         io.to(receiverSocketId).emit("messagesRead", {
           readBy: myId,
-          chatPartnerId: myId, // Chính là mình
+          chatPartnerId: myId,
         });
       }
     }
@@ -148,12 +158,12 @@ export const sendMessage = async (req, res) => {
       fileName: fileName,
       fileSize: fileSize,
       messageType: fileUrl ? "file" : audio ? "voice" : imageUrls.length > 0 ? "image" : "text",
-      isRead: false, // Mặc định là chưa đọc
+      isRead: false,
     };
 
     if (isGroup) {
       newMessageData.groupId = receiverOrGroupId;
-      newMessageData.readBy = [{ userId: senderId }]; // Người gửi mặc định đã xem
+      newMessageData.readBy = [{ user: senderId }]; // Đổi userId thành user theo model mới
     } else {
       newMessageData.receiverId = receiverOrGroupId;
     }
@@ -161,8 +171,13 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
-    const messageToSend = newMessage.toObject();
-    messageToSend.text = text; 
+    // Populate sender info để client hiển thị ngay
+    const populatedMessage = await Message.findById(newMessage._id)
+      .populate("senderId", "fullName profilePic")
+      .populate("readBy.user", "fullName profilePic");
+
+    const messageToSend = populatedMessage.toObject();
+    messageToSend.text = text; // Gửi text đã giải mã cho socket
 
     if (isGroup) {
       io.to(receiverOrGroupId).emit("newMessage", messageToSend);
@@ -180,23 +195,38 @@ export const sendMessage = async (req, res) => {
   }
 };
 
-// --- HÀM MỚI: ĐÁNH DẤU ĐÃ XEM THỦ CÔNG ---
 export const markMessagesAsRead = async (req, res) => {
   try {
-    const { id: senderId } = req.params;
+    const { id: chatId } = req.params;
     const myId = req.user._id;
 
-    await Message.updateMany(
-      { senderId, receiverId: myId, isRead: false },
-      { isRead: true }
-    );
+    const isGroup = await Group.exists({ _id: chatId });
 
-    const receiverSocketId = getReceiverSocketId(senderId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("messagesRead", {
-        readBy: myId,
-        chatPartnerId: myId,
+    if (isGroup) {
+      await Message.updateMany(
+        { groupId: chatId, "readBy.user": { $ne: myId } },
+        { $push: { readBy: { user: myId } } }
+      );
+      
+      const userInfo = await User.findById(myId).select("fullName profilePic");
+      io.to(chatId).emit("messagesRead", {
+        chatId,
+        readBy: userInfo,
+        isGroup: true
       });
+    } else {
+      await Message.updateMany(
+        { senderId: chatId, receiverId: myId, isRead: false },
+        { isRead: true }
+      );
+
+      const receiverSocketId = getReceiverSocketId(chatId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("messagesRead", {
+          readBy: myId,
+          chatPartnerId: myId,
+        });
+      }
     }
 
     res.status(200).json({ message: "Messages marked as read" });
@@ -217,9 +247,11 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    // Xử lý xóa file trên Cloudinary (giữ nguyên logic của bạn)
     if (message.images && message.images.length > 0) {
       const deletePromises = message.images.map((img) => {
-        const publicId = img.split("/").pop().split(".")[0];
+        const parts = img.split("/");
+        const publicId = parts[parts.length - 1].split(".")[0];
         return cloudinary.uploader.destroy(publicId);
       });
       await Promise.all(deletePromises);
@@ -232,6 +264,7 @@ export const deleteMessage = async (req, res) => {
       const publicId = message.audio.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
     }
+    
     if (message.fileUrl) {
       const publicId = "chat_files/" + message.fileUrl.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId, { resource_type: "raw" }); 

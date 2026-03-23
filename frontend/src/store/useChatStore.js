@@ -3,7 +3,9 @@ import toast from "react-hot-toast";
 import { axiosInstance } from "../lib/axios";
 import { useAuthStore } from "./useAuthStore";
 
-// --- Logic LocalStorage để giữ số đếm khi F5 ---
+// Biến global để quản lý Interval nhấp nháy tiêu đề
+let flashTitleInterval = null;
+
 const getStoredUnreadCounts = () => {
   try {
     const stored = localStorage.getItem("unreadCounts");
@@ -158,25 +160,30 @@ export const useChatStore = create((set, get) => ({
         // 1. Phát âm thanh Ping
         const notificationSound = new Audio("/ping.mp3");
         notificationSound.volume = 0.5;
-        notificationSound.play().catch(() => console.log("Yêu cầu tương tác trang để phát âm thanh"));
+        notificationSound.play().catch(() => {});
 
-        // 2. Thông báo trên tiêu đề Tab nếu không nhìn thấy tin nhắn trực tiếp
+        // 2. Thông báo trên tiêu đề Tab
         if (document.hidden || chatIdOfIncomingMsg !== currentChatId) {
-          const originalTitle = "MERN Chat"; // Hoặc document.title gốc của bạn
+          const originalTitle = "MERN Chat";
           const senderName = newMessage.senderId.fullName || "Ai đó";
-          
-          // Tạo hiệu ứng nhấp nháy tiêu đề
+
+          // Xóa Interval cũ nếu đang chạy để tránh chồng chéo
+          if (flashTitleInterval) clearInterval(flashTitleInterval);
+
           let isFlash = false;
-          const flashInterval = setInterval(() => {
-            document.title = isFlash ? originalTitle : `🔔 ${senderName} vừa nhắn...`;
+          flashTitleInterval = setInterval(() => {
+            document.title = isFlash ? originalTitle : `🔔 Tin nhắn từ ${senderName}...`;
             isFlash = !isFlash;
           }, 1000);
 
-          // Dừng nhấp nháy sau 4 giây
-          setTimeout(() => {
-            clearInterval(flashInterval);
+          // Tự động dọn dẹp khi người dùng quay lại Tab (focus)
+          const cleanUp = () => {
+            clearInterval(flashTitleInterval);
+            flashTitleInterval = null;
             document.title = originalTitle;
-          }, 4000);
+            window.removeEventListener("focus", cleanUp);
+          };
+          window.addEventListener("focus", cleanUp);
         }
       }
 

@@ -1,6 +1,7 @@
 import { THEMES } from "../constants";
 import { useThemeStore } from "../store/useThemeStore";
-import { Send } from "lucide-react";
+import { useAuthStore } from "../store/useAuthStore"; // Import thêm AuthStore
+import { Send, Volume2, VolumeX } from "lucide-react"; // Thêm icon âm thanh
 
 const PREVIEW_MESSAGES = [
   { id: 1, content: "Hey! How's it going?", isSent: false },
@@ -9,10 +10,12 @@ const PREVIEW_MESSAGES = [
 
 const SettingsPage = () => {
   const { theme, setTheme } = useThemeStore();
+  const { isSoundEnabled, setSoundEnabled } = useAuthStore(); // Lấy state âm thanh
 
   return (
     <div className="h-screen container mx-auto px-4 pt-20 max-w-5xl">
-      <div className="space-y-6">
+      <div className="space-y-8">
+        {/* Theme Section */}
         <div className="flex flex-col gap-1">
           <h2 className="text-lg font-semibold">Theme</h2>
           <p className="text-sm text-base-content/70">Choose a theme for your chat interface</p>
@@ -43,66 +46,99 @@ const SettingsPage = () => {
           ))}
         </div>
 
-        {/* Preview Section */}
-        <h3 className="text-lg font-semibold mb-3">Preview</h3>
-        <div className="rounded-xl border border-base-300 overflow-hidden bg-base-100 shadow-lg">
-          <div className="p-4 bg-base-200">
-            <div className="max-w-lg mx-auto">
-              {/* Mock Chat UI */}
-              <div className="bg-base-100 rounded-xl shadow-sm overflow-hidden">
-                {/* Chat Header */}
-                <div className="px-4 py-3 border-b border-base-300 bg-base-100">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-content font-medium">
-                      J
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-sm">John Doe</h3>
-                      <p className="text-xs text-base-content/70">Online</p>
-                    </div>
-                  </div>
-                </div>
+        {/* --- TÍNH NĂNG MỚI: NOTIFICATION SETTINGS --- */}
+        <div className="space-y-4">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-lg font-semibold">Notifications</h2>
+            <p className="text-sm text-base-content/70">Configure how you receive alerts</p>
+          </div>
 
-                {/* Chat Messages */}
-                <div className="p-4 space-y-4 min-h-[200px] max-h-[200px] overflow-y-auto bg-base-100">
-                  {PREVIEW_MESSAGES.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`flex ${message.isSent ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`
-                          max-w-[80%] rounded-xl p-3 shadow-sm
-                          ${message.isSent ? "bg-primary text-primary-content" : "bg-base-200"}
-                        `}
-                      >
-                        <p className="text-sm">{message.content}</p>
-                        <p
-                          className={`
-                            text-[10px] mt-1.5
-                            ${message.isSent ? "text-primary-content/70" : "text-base-content/70"}
-                          `}
-                        >
-                          12:00 PM
-                        </p>
+          <div className="bg-base-200/50 rounded-xl p-4 border border-base-300">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${isSoundEnabled ? "bg-primary/10 text-primary" : "bg-base-300 text-base-content/50"}`}>
+                  {isSoundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+                </div>
+                <div>
+                  <p className="text-sm font-medium">Notification Sound</p>
+                  <p className="text-xs text-base-content/60">
+                    {isSoundEnabled ? "Sound is active" : "Muted (Visual alerts only)"}
+                  </p>
+                </div>
+              </div>
+              <input 
+                type="checkbox" 
+                className="toggle toggle-primary" 
+                checked={isSoundEnabled}
+                onChange={(e) => setSoundEnabled(e.target.checked)}
+              />
+            </div>
+          </div>
+        </div>
+        {/* ------------------------------------------- */}
+
+        {/* Preview Section */}
+        <div className="space-y-3">
+          <h3 className="text-lg font-semibold">Preview</h3>
+          <div className="rounded-xl border border-base-300 overflow-hidden bg-base-100 shadow-lg">
+            <div className="p-4 bg-base-200">
+              <div className="max-w-lg mx-auto">
+                {/* Mock Chat UI */}
+                <div className="bg-base-100 rounded-xl shadow-sm overflow-hidden">
+                  {/* Chat Header */}
+                  <div className="px-4 py-3 border-b border-base-300 bg-base-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-content font-medium">
+                        J
+                      </div>
+                      <div>
+                        <h3 className="font-medium text-sm">John Doe</h3>
+                        <p className="text-xs text-base-content/70">Online</p>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  </div>
 
-                {/* Chat Input */}
-                <div className="p-4 border-t border-base-300 bg-base-100">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      className="input input-bordered flex-1 text-sm h-10"
-                      placeholder="Type a message..."
-                      value="This is a preview"
-                      readOnly
-                    />
-                    <button className="btn btn-primary h-10 min-h-0">
-                      <Send size={18} />
-                    </button>
+                  {/* Chat Messages */}
+                  <div className="p-4 space-y-4 min-h-[200px] max-h-[200px] overflow-y-auto bg-base-100">
+                    {PREVIEW_MESSAGES.map((message) => (
+                      <div
+                        key={message.id}
+                        className={`flex ${message.isSent ? "justify-end" : "justify-start"}`}
+                      >
+                        <div
+                          className={`
+                            max-w-[80%] rounded-xl p-3 shadow-sm
+                            ${message.isSent ? "bg-primary text-primary-content" : "bg-base-200"}
+                          `}
+                        >
+                          <p className="text-sm">{message.content}</p>
+                          <p
+                            className={`
+                              text-[10px] mt-1.5
+                              ${message.isSent ? "text-primary-content/70" : "text-base-content/70"}
+                            `}
+                          >
+                            12:00 PM
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Chat Input */}
+                  <div className="p-4 border-t border-base-300 bg-base-100">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        className="input input-bordered flex-1 text-sm h-10"
+                        placeholder="Type a message..."
+                        value="This is a preview"
+                        readOnly
+                      />
+                      <button className="btn btn-primary h-10 min-h-0">
+                        <Send size={18} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -113,4 +149,5 @@ const SettingsPage = () => {
     </div>
   );
 };
+
 export default SettingsPage;

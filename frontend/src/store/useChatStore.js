@@ -148,10 +148,8 @@ export const useChatStore = create((set, get) => ({
       const { selectedUser, messages } = get();
       const { chatId, readBy, isGroup, chatPartnerId } = data;
 
-      // Xử lý cho Group
       if (isGroup && selectedUser?._id === chatId) {
         const updatedMessages = messages.map((msg) => {
-          // Kiểm tra xem user này đã có trong danh sách readBy chưa
           const alreadyRead = msg.readBy?.some(r => (r.user?._id || r.user) === readBy._id);
           if (!alreadyRead) {
             return {
@@ -163,14 +161,12 @@ export const useChatStore = create((set, get) => ({
         });
         set({ messages: updatedMessages });
       } 
-      // Xử lý cho Chat 1-1
       else if (!isGroup && selectedUser?._id === chatPartnerId) {
         const updatedMessages = messages.map((m) => ({ ...m, isRead: true }));
         set({ messages: updatedMessages });
       }
     });
 
-    // --- LẮNG NGHE KHI TIN NHẮN BỊ XOÁ (THU HỒI) ---
     socket.on("messageDeleted", (messageId) => {
       set({ messages: get().messages.filter((m) => m._id !== messageId) });
     });
@@ -178,6 +174,7 @@ export const useChatStore = create((set, get) => ({
     socket.on("newMessage", (newMessage) => {
       const { selectedUser, users, groups, messages, unreadCounts } = get();
       const authUser = useAuthStore.getState().authUser;
+      const { isSoundEnabled } = useAuthStore.getState(); // Lấy trạng thái âm thanh từ AuthStore
       if (!authUser) return;
 
       const currentChatId = selectedUser?._id?.toString();
@@ -192,10 +189,15 @@ export const useChatStore = create((set, get) => ({
 
       // --- LOGIC THÔNG BÁO ---
       if (msgSenderId !== authUser._id.toString()) {
-        const notificationSound = new Audio("/ping.mp3");
-        notificationSound.volume = 0.5;
-        notificationSound.play().catch(() => {});
+        
+        // 1. XỬ LÝ ÂM THANH: Chỉ phát nếu isSoundEnabled là true
+        if (isSoundEnabled) {
+          const notificationSound = new Audio("/ping.mp3");
+          notificationSound.volume = 0.5;
+          notificationSound.play().catch(() => {});
+        }
 
+        // 2. XỬ LÝ THÔNG BÁO CHỮ TRÊN TAB (Giữ nguyên không đổi)
         if (document.hidden || chatIdOfIncomingMsg !== currentChatId) {
           const originalTitle = "MERN Chat";
           const senderName = newMessage.senderId.fullName || "Ai đó";
@@ -217,13 +219,11 @@ export const useChatStore = create((set, get) => ({
         }
       }
 
-      // Nếu đang mở chat và nhận tin từ người đó -> Tự động đánh dấu đã xem ngay
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
         const isExisted = messages.some((m) => m._id === newMessage._id);
         if (!isExisted) {
           set({ messages: [...messages, newMessage] });
         }
-        // Gọi API báo đã xem ngay lập tức vì đang mở tab chat
         get().markAsRead(chatIdOfIncomingMsg);
       }
 
@@ -236,7 +236,6 @@ export const useChatStore = create((set, get) => ({
         setStoredUnreadCounts(newCounts);
       }
 
-      // Cập nhật tin nhắn cuối cùng (Last Message)
       if (msgGroupId) {
         const updatedGroups = groups
           .map((g) => (g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g))
@@ -258,22 +257,19 @@ export const useChatStore = create((set, get) => ({
     const authUser = useAuthStore.getState().authUser;
 
     try {
-      // 1. Cập nhật Local State (Số tin nhắn chưa đọc trên Sidebar)
       if (unreadCounts[chatId]) {
         const newCounts = { ...unreadCounts, [chatId]: 0 };
         set({ unreadCounts: newCounts });
         setStoredUnreadCounts(newCounts);
       }
 
-      // 2. Gọi API Backend để cập nhật DB
       await axiosInstance.put(`/messages/read/${chatId}`);
 
-      // 3. Emit Socket báo cho đối phương biết mình đã đọc
       if (socket && authUser) {
         const isGroup = !!selectedUser?.members;
         socket.emit("markAsRead", {
           chatId: chatId,
-          senderId: chatId, // Cho chat 1-1
+          senderId: chatId,
           receiverId: authUser._id,
           isGroup: isGroup
         });

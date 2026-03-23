@@ -13,6 +13,16 @@ export const useAuthStore = create((set, get) => ({
   isCheckingAuth: true,
   onlineUsers: [],
   socket: null,
+  
+  // --- TÍNH NĂNG MỚI: QUẢN LÝ ÂM THANH ---
+  // Lấy trạng thái từ localStorage, nếu chưa có thì mặc định là true
+  isSoundEnabled: localStorage.getItem("chat-sound-enabled") !== "false",
+
+  setSoundEnabled: (enabled) => {
+    localStorage.setItem("chat-sound-enabled", enabled);
+    set({ isSoundEnabled: enabled });
+  },
+  // --------------------------------------
 
   checkAuth: async () => {
     try {

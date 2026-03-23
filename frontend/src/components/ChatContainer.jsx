@@ -47,32 +47,32 @@ const ChatContainer = () => {
 
   const isGroup = !!selectedUser?.members;
 
-  const formatDuration = (seconds) => {
-    if (!seconds) return "0:00";
-    if (typeof seconds === "string") return seconds; 
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
   return (
     <div className="flex-1 flex flex-col overflow-auto">
       <ChatHeader />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message) => {
+          // XÁC ĐỊNH NGƯỜI GỬI ĐỂ HIỂN THỊ AVATAR MỚI NHẤT
           const isMyMessage = message.senderId === authUser._id || message.senderId?._id === authUser._id;
-          const senderInfo = isMyMessage ? authUser : message.senderId;
+          
+          /**
+           * Giải pháp: Luôn ưu tiên lấy data từ authUser (nếu là mình) hoặc selectedUser (nếu là đối phương)
+           * để đảm bảo khi cập nhật profilePic ở store, avatar trong chat sẽ thay đổi ngay lập tức.
+           */
+          const displayAvatar = isMyMessage 
+            ? authUser.profilePic 
+            : (isGroup ? message.senderId?.profilePic : selectedUser.profilePic);
 
-          // LOGIC NHẬN DIỆN LOẠI TIN NHẮN
+          const displayName = isMyMessage 
+            ? authUser.fullName 
+            : (isGroup ? message.senderId?.fullName : selectedUser.fullName);
+
+          // LOGIC NHẬN DIỆN LOẠI TIN NHẮN (Giữ nguyên)
           const isVideoCall = message.callType === "video" || message.messageType === "video_call";
           const isVoice = message.messageType === "voice";
           const isFile = message.messageType === "file" || !!message.fileUrl;
-          
-          // Kiểm tra cuộc gọi nhỡ
           const isMissed = message.duration === "00:00" || message.callDetails?.status === "missed";
-          
-          // Nhận diện log cuộc gọi
           const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call" || message.messageType === "video_call";
 
           return (
@@ -80,18 +80,20 @@ const ChatContainer = () => {
               key={message._id}
               className={`chat ${isMyMessage ? "chat-end" : "chat-start"}`}
             >
+              {/* HIỂN THỊ AVATAR TRONG ĐOẠN CHAT */}
               <div className="chat-image avatar">
-                <div className="size-10 rounded-full border">
+                <div className="size-10 rounded-full border overflow-hidden">
                   <img
-                    src={senderInfo?.profilePic || "/avatar.png"}
+                    src={displayAvatar || "/avatar.png"}
                     alt="profile pic"
+                    className="object-cover w-full h-full"
                   />
                 </div>
               </div>
               
               <div className="chat-header mb-1 flex flex-col">
                 {isGroup && !isMyMessage && (
-                  <span className="text-xs font-bold mb-1">{senderInfo?.fullName}</span>
+                  <span className="text-xs font-bold mb-1">{displayName}</span>
                 )}
                 <time className="text-xs opacity-50 px-1">
                   {formatMessageTime(message.createdAt)}

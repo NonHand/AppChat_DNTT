@@ -53,13 +53,8 @@ const ChatContainer = () => {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message) => {
-          // XÁC ĐỊNH NGƯỜI GỬI ĐỂ HIỂN THỊ AVATAR MỚI NHẤT
           const isMyMessage = message.senderId === authUser._id || message.senderId?._id === authUser._id;
           
-          /**
-           * Giải pháp: Luôn ưu tiên lấy data từ authUser (nếu là mình) hoặc selectedUser (nếu là đối phương)
-           * để đảm bảo khi cập nhật profilePic ở store, avatar trong chat sẽ thay đổi ngay lập tức.
-           */
           const displayAvatar = isMyMessage 
             ? authUser.profilePic 
             : (isGroup ? message.senderId?.profilePic : selectedUser.profilePic);
@@ -68,19 +63,21 @@ const ChatContainer = () => {
             ? authUser.fullName 
             : (isGroup ? message.senderId?.fullName : selectedUser.fullName);
 
-          // LOGIC NHẬN DIỆN LOẠI TIN NHẮN (Giữ nguyên)
           const isVideoCall = message.callType === "video" || message.messageType === "video_call";
           const isVoice = message.messageType === "voice";
           const isFile = message.messageType === "file" || !!message.fileUrl;
           const isMissed = message.duration === "00:00" || message.callDetails?.status === "missed";
           const isCallLog = !!message.callType || message.text?.includes("Cuộc gọi") || message.messageType === "call" || message.messageType === "video_call";
 
+          // Logic xử lý mảng ảnh để hiển thị Grid
+          const hasMultipleImages = message.images && message.images.length > 0;
+          const displayImages = hasMultipleImages ? message.images : (message.image ? [message.image] : []);
+
           return (
             <div
               key={message._id}
               className={`chat ${isMyMessage ? "chat-end" : "chat-start"}`}
             >
-              {/* HIỂN THỊ AVATAR TRONG ĐOẠN CHAT */}
               <div className="chat-image avatar">
                 <div className="size-10 rounded-full border overflow-hidden">
                   <img
@@ -118,17 +115,10 @@ const ChatContainer = () => {
                   </button>
                 )}
 
-                {/* 1. HIỂN THỊ TIN NHẮN CUỘC GỌI */}
                 {isCallLog ? (
                   <div className="flex items-center gap-3 py-1 px-2 min-w-[160px]">
                     <div className={`p-2 rounded-full ${isMissed ? "bg-error/20 text-error" : "bg-primary/20 text-primary"}`}>
-                      {isMissed ? (
-                        <PhoneMissed size={20} />
-                      ) : isVideoCall ? (
-                        <Video size={20} />
-                      ) : (
-                        <Phone size={20} />
-                      )}
+                      {isMissed ? <PhoneMissed size={20} /> : isVideoCall ? <Video size={20} /> : <Phone size={20} />}
                     </div>
                     <div className="flex flex-col">
                       <span className="text-sm font-semibold whitespace-nowrap">
@@ -140,7 +130,6 @@ const ChatContainer = () => {
                     </div>
                   </div>
                 ) : isFile ? (
-                  /* 2. HIỂN THỊ TIN NHẮN TỆP TIN (FILE) */
                   <div className="flex flex-col gap-2 p-1">
                     <div className="flex items-center gap-3 bg-base-300/50 p-3 rounded-lg border border-base-content/5 hover:bg-base-300 transition-colors">
                       <div className="p-2 bg-primary/10 text-primary rounded-lg">
@@ -160,7 +149,6 @@ const ChatContainer = () => {
                         target="_blank"
                         rel="noreferrer"
                         className="p-2 hover:bg-primary/20 text-primary rounded-full transition-all"
-                        title="Tải về"
                       >
                         <Download size={18} />
                       </a>
@@ -168,28 +156,36 @@ const ChatContainer = () => {
                     {message.text && <p className="text-sm px-1">{message.text}</p>}
                   </div>
                 ) : isVoice ? (
-                  /* 3. HIỂN THỊ TIN NHẮN GIỌNG NÓI */
                   <div className="flex flex-col gap-2 p-1">
                     <div className="flex items-center gap-2 text-primary-content/80">
                       <Mic size={14} />
                       <span className="text-[10px] uppercase font-bold tracking-wider">Voice Message</span>
                     </div>
-                    <audio 
-                      src={message.audio} 
-                      controls 
-                      className="h-8 w-48 sm:w-60 filter invert brightness-200 contrast-75"
-                    />
+                    <audio src={message.audio} controls className="h-8 w-48 sm:w-60 filter invert brightness-200 contrast-75" />
                     {message.text && <p className="text-sm mt-1">{message.text}</p>}
                   </div>
                 ) : (
-                  /* 4. HIỂN THỊ TIN NHẮN VĂN BẢN / HÌNH ẢNH */
                   <>
-                    {message.image && (
-                      <img
-                        src={message.image}
-                        alt="Attachment"
-                        className="sm:max-w-[200px] rounded-md mb-2 object-cover"
-                      />
+                    {/* HIỂN THỊ ẢNH (HỖ TRỢ NHIỀU ẢNH DẠNG GRID) */}
+                    {displayImages.length > 0 && (
+                      <div className={`grid gap-1 mb-2 ${
+                        displayImages.length === 1 ? "grid-cols-1" : 
+                        displayImages.length === 2 ? "grid-cols-2" : 
+                        "grid-cols-2"
+                      }`}>
+                        {displayImages.map((img, idx) => (
+                          <img
+                            key={idx}
+                            src={img}
+                            alt="Attachment"
+                            className={`rounded-md object-cover cursor-pointer hover:opacity-90 transition-opacity
+                              ${displayImages.length === 1 ? "max-h-60 w-auto" : "h-32 w-full"}
+                              ${displayImages.length === 3 && idx === 0 ? "col-span-2 h-40" : ""} 
+                            `}
+                            onClick={() => window.open(img, "_blank")}
+                          />
+                        ))}
+                      </div>
                     )}
                     {message.text && <p className="text-sm leading-relaxed">{message.text}</p>}
                   </>

@@ -5,40 +5,50 @@ import toast from "react-hot-toast";
 
 const MessageInput = () => {
   const [text, setText] = useState("");
-  const [imagePreview, setImagePreview] = useState(null);
-  const [filePreview, setFilePreview] = useState(null); // Trạng thái cho File
+  // Chuyển sang mảng để lưu nhiều ảnh preview
+  const [imagePreviews, setImagePreviews] = useState([]);
+  const [filePreview, setFilePreview] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [audioPreview, setAudioPreview] = useState(null);
   
   const imageInputRef = useRef(null);
-  const fileInputRef = useRef(null); // Ref cho input file
+  const fileInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
 
   const { sendMessage, selectedUser } = useChatStore();
 
-  // --- XỬ LÝ HÌNH ẢNH ---
+  // --- XỬ LÝ NHIỀU HÌNH ẢNH ---
   const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    // Giới hạn số lượng ảnh (VD: tối đa 5 ảnh)
+    if (imagePreviews.length + files.length > 5) {
+      toast.error("You can only upload up to 5 images at once");
       return;
     }
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setImagePreview(reader.result);
-      setFilePreview(null); // Tắt preview file nếu chọn ảnh
-    };
-    reader.readAsDataURL(file);
+
+    files.forEach((file) => {
+      if (!file.type.startsWith("image/")) {
+        toast.error(`${file.name} is not an image file`);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreviews((prev) => [...prev, reader.result]);
+        setFilePreview(null); // Tắt preview file nếu chọn ảnh
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
-  // --- XỬ LÝ FILE (PDF, DOCX, ZIP, v.v.) ---
+  // --- XỬ LÝ FILE ---
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Giới hạn dung lượng file (VD: 10MB)
     if (file.size > 10 * 1024 * 1024) {
       toast.error("File is too large. Maximum size is 10MB");
       return;
@@ -51,13 +61,13 @@ const MessageInput = () => {
         size: file.size,
         base64: reader.result,
       });
-      setImagePreview(null); // Tắt preview ảnh nếu chọn file
+      setImagePreviews([]); // Tắt preview ảnh nếu chọn file
     };
     reader.readAsDataURL(file);
   };
 
-  const removeImage = () => {
-    setImagePreview(null);
+  const removeImage = (index) => {
+    setImagePreviews((prev) => prev.filter((_, i) => i !== index));
     if (imageInputRef.current) imageInputRef.current.value = "";
   };
 
@@ -99,7 +109,7 @@ const MessageInput = () => {
       setIsRecording(true);
     } catch (error) {
       console.error("Mic error:", error);
-      toast.error("Could not access microphone. Please check permissions.");
+      toast.error("Could not access microphone.");
     }
   };
 
@@ -112,15 +122,16 @@ const MessageInput = () => {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!text.trim() && !imagePreview && !audioPreview && !filePreview) return;
+    if (!text.trim() && imagePreviews.length === 0 && !audioPreview && !filePreview) return;
 
     try {
       const messagePayload = {
         text: text.trim(),
-        image: imagePreview,
+        // Gửi mảng images cho backend xử lý
+        images: imagePreviews, 
         audio: audioPreview,
-        file: filePreview?.base64, // Gửi dữ liệu file
-        fileName: filePreview?.name, // Gửi tên file
+        file: filePreview?.base64,
+        fileName: filePreview?.name,
         fileSize: filePreview?.size,
       };
 
@@ -132,7 +143,7 @@ const MessageInput = () => {
 
       // Reset trạng thái
       setText("");
-      setImagePreview(null);
+      setImagePreviews([]);
       setAudioPreview(null);
       setFilePreview(null);
       if (imageInputRef.current) imageInputRef.current.value = "";
@@ -146,23 +157,35 @@ const MessageInput = () => {
 
   return (
     <div className="p-4 w-full">
-      {/* Image Preview */}
-      {imagePreview && (
-        <div className="mb-3 flex items-center gap-2">
-          <div className="relative">
-            <img
-              src={imagePreview}
-              alt="Preview"
-              className="w-20 h-20 object-cover rounded-lg border border-zinc-700"
-            />
-            <button
-              onClick={removeImage}
-              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-base-300 flex items-center justify-center"
+      {/* Multi-Image Preview */}
+      {imagePreviews.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {imagePreviews.map((img, index) => (
+            <div key={index} className="relative group">
+              <img
+                src={img}
+                alt={`Preview ${index}`}
+                className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg border border-zinc-700"
+              />
+              <button
+                onClick={() => removeImage(index)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-base-300 flex items-center justify-center hover:bg-error hover:text-white transition-colors"
+                type="button"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+          {/* Nút thêm ảnh nhanh nếu chưa đạt giới hạn */}
+          {imagePreviews.length < 5 && (
+            <button 
               type="button"
+              onClick={() => imageInputRef.current?.click()}
+              className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-dashed border-zinc-700 rounded-lg flex items-center justify-center text-zinc-500 hover:border-primary hover:text-primary transition-all"
             >
-              <X className="size-3" />
+              <Image size={24} />
             </button>
-          </div>
+          )}
         </div>
       )}
 
@@ -204,22 +227,21 @@ const MessageInput = () => {
           <input
             type="text"
             className="w-full input input-bordered rounded-lg input-sm sm:input-md"
-            placeholder={selectedUser?.members ? `Message to ${selectedUser.name}...` : "Type a message..."}
+            placeholder="Type a message..."
             value={text}
             onChange={(e) => setText(e.target.value)}
             disabled={isRecording}
           />
           
-          {/* Input Ẩn cho Ảnh */}
           <input
             type="file"
             accept="image/*"
+            multiple // Cho phép chọn nhiều ảnh
             className="hidden"
             ref={imageInputRef}
             onChange={handleImageChange}
           />
 
-          {/* Input Ẩn cho File */}
           <input
             type="file"
             className="hidden"
@@ -227,17 +249,15 @@ const MessageInput = () => {
             onChange={handleFileChange}
           />
 
-          {/* Nút Chọn Ảnh */}
           <button
             type="button"
-            className={`hidden sm:flex btn btn-circle btn-sm sm:btn-md ${imagePreview ? "text-emerald-500" : "text-zinc-400"}`}
+            className={`hidden sm:flex btn btn-circle btn-sm sm:btn-md ${imagePreviews.length > 0 ? "text-emerald-500" : "text-zinc-400"}`}
             onClick={() => imageInputRef.current?.click()}
             disabled={isRecording}
           >
             <Image size={20} />
           </button>
 
-          {/* Nút Chọn File */}
           <button
             type="button"
             className={`hidden sm:flex btn btn-circle btn-sm sm:btn-md ${filePreview ? "text-primary" : "text-zinc-400"}`}
@@ -247,7 +267,6 @@ const MessageInput = () => {
             <Paperclip size={20} />
           </button>
 
-          {/* Nút Voice */}
           <button
             type="button"
             className={`btn btn-circle btn-sm sm:btn-md ${isRecording ? "btn-error animate-pulse text-white" : "text-zinc-400"}`}
@@ -260,7 +279,7 @@ const MessageInput = () => {
         <button
           type="submit"
           className="btn btn-sm sm:btn-md btn-circle btn-primary"
-          disabled={!text.trim() && !imagePreview && !audioPreview && !filePreview}
+          disabled={!text.trim() && imagePreviews.length === 0 && !audioPreview && !filePreview}
         >
           <Send size={22} />
         </button>

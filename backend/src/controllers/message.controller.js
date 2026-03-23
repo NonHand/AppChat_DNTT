@@ -6,46 +6,13 @@ import cloudinary from "../lib/cloudinary.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import { decrypt, encrypt } from "../lib/encryption.js";
 
-/* export const getUsersForSidebar = async (req, res) => {
-  try {
-    const loggedInUserId = req.user._id;
-    const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
-
-    const usersWithLastMsg = await Promise.all(
-      users.map(async (user) => {
-        const lastMessage = await Message.findOne({
-          $or: [
-            { senderId: loggedInUserId, receiverId: user._id },
-            { senderId: user._id, receiverId: loggedInUserId },
-          ],
-        }).sort({ createdAt: -1 });
-
-        return {
-          ...user,
-          lastMessage: lastMessage ? lastMessage : null,
-          lastMsgTime: lastMessage ? lastMessage.createdAt : user.createdAt,
-        };
-      })
-    );
-
-    usersWithLastMsg.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
-    res.status(200).json(usersWithLastMsg);
-  } catch (error) {
-    console.error("Error in getUsersForSidebar: ", error.message);
-    res.status(500).json({ error: "Internal server error" });
-  }
-}; */
-
 export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
-    
-    // 1. Lấy danh sách người dùng (trừ bản thân)
     const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
 
     const usersWithLastMsg = await Promise.all(
       users.map(async (user) => {
-        // Tìm tin nhắn cuối cùng giữa 2 người
         const lastMessage = await Message.findOne({
           $or: [
             { senderId: loggedInUserId, receiverId: user._id },
@@ -56,7 +23,6 @@ export const getUsersForSidebar = async (req, res) => {
         let processedLastMessage = null;
         if (lastMessage) {
           processedLastMessage = { ...lastMessage };
-          // GIẢI MÃ ở đây cho Cá nhân
           if (processedLastMessage.text) {
             processedLastMessage.text = decrypt(processedLastMessage.text);
           }
@@ -70,43 +36,13 @@ export const getUsersForSidebar = async (req, res) => {
       })
     );
 
-    // Sắp xếp theo thời gian tin nhắn mới nhất
     usersWithLastMsg.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
-    
     res.status(200).json(usersWithLastMsg);
   } catch (error) {
     console.error("Error in getUsersForSidebar: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };
-
-/* export const getMessages = async (req, res) => {
-  try {
-    const { id: chatPartnerId } = req.params;
-    const myId = req.user._id;
-
-    const isGroup = await Group.exists({ _id: chatPartnerId });
-
-    let messages;
-    if (isGroup) {
-      messages = await Message.find({ groupId: chatPartnerId })
-        .populate("senderId", "fullName profilePic")
-        .sort({ createdAt: 1 });
-    } else {
-      messages = await Message.find({
-        $or: [
-          { senderId: myId, receiverId: chatPartnerId },
-          { senderId: chatPartnerId, receiverId: myId },
-        ],
-      }).sort({ createdAt: 1 });
-    }
-
-    res.status(200).json(messages);
-  } catch (error) {
-    console.log("Error in getMessages controller: ", error.message);
-    res.status(500).json({ error: "Internal server error" });
-  }
-}; */
 
 export const getMessages = async (req, res) => {
   try {
@@ -129,17 +65,13 @@ export const getMessages = async (req, res) => {
       }).sort({ createdAt: 1 });
     }
 
-    // --- PHẦN GIẢI MÃ TIN NHẮN ---
     const decryptedMessages = messages.map((msg) => {
       const messageObj = msg.toObject();
-
       if (messageObj.text) {
         messageObj.text = decrypt(messageObj.text);
       }
-
       return messageObj;
     });
-    // ----------------------------
 
     res.status(200).json(decryptedMessages);
   } catch (error) {
@@ -148,89 +80,29 @@ export const getMessages = async (req, res) => {
   }
 };
 
-// Gửi tin nhắn (Cập nhật hỗ trợ: Image, Audio, và FILE TÀI LIỆU)
-/* export const sendMessage = async (req, res) => {
-  try {
-    const { text, image, audio, file, fileName, fileSize } = req.body;
-    const { id: receiverOrGroupId } = req.params;
-    const senderId = req.user._id;
-
-    let imageUrl;
-    if (image) {
-      const uploadResponse = await cloudinary.uploader.upload(image);
-      imageUrl = uploadResponse.secure_url;
-    }
-
-    let audioUrl;
-    if (audio) {
-      const uploadResponse = await cloudinary.uploader.upload(audio, {
-        resource_type: "video",
-        folder: "voice_messages",
-      });
-      audioUrl = uploadResponse.secure_url;
-    }
-
-    // XỬ LÝ UPLOAD FILE (PDF, Docx, Zip...)
-    let fileUrl;
-    if (file) {
-      const uploadResponse = await cloudinary.uploader.upload(file, {
-        resource_type: "auto", // Quan trọng: auto để nhận diện mọi loại file
-        folder: "chat_files",
-      });
-      fileUrl = uploadResponse.secure_url;
-    }
-
-    const isGroup = await Group.exists({ _id: receiverOrGroupId });
-
-    const newMessageData = {
-      senderId,
-      text,
-      image: imageUrl,
-      audio: audioUrl,
-      fileUrl: fileUrl,
-      fileName: fileName,
-      fileSize: fileSize,
-      messageType: fileUrl ? "file" : audio ? "voice" : image ? "image" : "text",
-    };
-
-    if (isGroup) {
-      newMessageData.groupId = receiverOrGroupId;
-    } else {
-      newMessageData.receiverId = receiverOrGroupId;
-    }
-
-    const newMessage = new Message(newMessageData);
-    await newMessage.save();
-
-    // SOCKET REALTIME
-    if (isGroup) {
-      io.to(receiverOrGroupId).emit("newMessage", newMessage);
-    } else {
-      const receiverSocketId = getReceiverSocketId(receiverOrGroupId);
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit("newMessage", newMessage);
-      }
-    }
-
-    res.status(201).json(newMessage);
-  } catch (error) {
-    console.log("Error in sendMessage controller: ", error.message);
-    res.status(500).json({ error: "Internal server error" });
-  }
-}; */
-
+// --- HÀM SEND MESSAGE: HỖ TRỢ GỬI NHIỀU ẢNH ---
 export const sendMessage = async (req, res) => {
   try {
-    const { text, image, audio, file, fileName, fileSize } = req.body;
+    const { text, image, images, audio, file, fileName, fileSize } = req.body;
     const { id: receiverOrGroupId } = req.params;
     const senderId = req.user._id;
 
-    let imageUrl;
-    if (image) {
+    // 1. Xử lý Upload Ảnh (Hỗ trợ cả đơn lẻ 'image' cũ và mảng 'images' mới)
+    let imageUrls = [];
+    
+    // Nếu gửi mảng nhiều ảnh
+    if (images && Array.isArray(images) && images.length > 0) {
+      const uploadPromises = images.map((img) => cloudinary.uploader.upload(img));
+      const uploadResponses = await Promise.all(uploadPromises);
+      imageUrls = uploadResponses.map((res) => res.secure_url);
+    } 
+    // Nếu gửi 1 ảnh duy nhất (giữ logic cũ cho mobile/các version cũ)
+    else if (image) {
       const uploadResponse = await cloudinary.uploader.upload(image);
-      imageUrl = uploadResponse.secure_url;
+      imageUrls = [uploadResponse.secure_url];
     }
 
+    // 2. Xử lý Audio
     let audioUrl;
     if (audio) {
       const uploadResponse = await cloudinary.uploader.upload(audio, {
@@ -240,7 +112,7 @@ export const sendMessage = async (req, res) => {
       audioUrl = uploadResponse.secure_url;
     }
 
-    // XỬ LÝ UPLOAD FILE (PDF, Docx, Zip...)
+    // 3. Xử lý File tài liệu
     let fileUrl;
     if (file) {
       const uploadResponse = await cloudinary.uploader.upload(file, {
@@ -252,19 +124,20 @@ export const sendMessage = async (req, res) => {
 
     const isGroup = await Group.exists({ _id: receiverOrGroupId });
 
-    // --- PHẦN MÃ HÓA TEXT ---
+    // 4. Mã hóa nội dung văn bản
     const encryptedText = text ? encrypt(text) : text;
-    // ------------------------
 
     const newMessageData = {
       senderId,
-      text: encryptedText, // Lưu bản đã mã hóa vào Database
-      image: imageUrl,
+      text: encryptedText,
+      // Lưu ảnh vào cả trường đơn lẻ (ảnh đầu tiên) và trường mảng (tất cả ảnh)
+      image: imageUrls.length > 0 ? imageUrls[0] : null, 
+      images: imageUrls, 
       audio: audioUrl,
       fileUrl: fileUrl,
       fileName: fileName,
       fileSize: fileSize,
-      messageType: fileUrl ? "file" : audio ? "voice" : image ? "image" : "text",
+      messageType: fileUrl ? "file" : audio ? "voice" : imageUrls.length > 0 ? "image" : "text",
     };
 
     if (isGroup) {
@@ -276,13 +149,10 @@ export const sendMessage = async (req, res) => {
     const newMessage = new Message(newMessageData);
     await newMessage.save();
 
-    // --- CHUẨN BỊ DỮ LIỆU GỬI ĐI (BẢN RÕ) ---
-    // Tạo bản sao để gửi qua Socket và Response mà không làm hỏng bản mã hóa trong DB
+    // 5. Chuẩn bị dữ liệu gửi Realtime (Bản rõ để hiển thị ngay)
     const messageToSend = newMessage.toObject();
-    messageToSend.text = text; // Gán lại nội dung chưa mã hóa để hiển thị ngay trên UI
-    // ---------------------------------------
+    messageToSend.text = text; 
 
-    // SOCKET REALTIME - Gửi bản rõ (messageToSend)
     if (isGroup) {
       io.to(receiverOrGroupId).emit("newMessage", messageToSend);
     } else {
@@ -292,7 +162,6 @@ export const sendMessage = async (req, res) => {
       }
     }
 
-    // RESPONSE - Trả về bản rõ
     res.status(201).json(messageToSend);
   } catch (error) {
     console.log("Error in sendMessage controller: ", error.message);
@@ -311,17 +180,22 @@ export const deleteMessage = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Xóa ảnh trên Cloudinary
-    if (message.image) {
+    // Xóa nhiều ảnh trên Cloudinary
+    if (message.images && message.images.length > 0) {
+      const deletePromises = message.images.map((img) => {
+        const publicId = img.split("/").pop().split(".")[0];
+        return cloudinary.uploader.destroy(publicId);
+      });
+      await Promise.all(deletePromises);
+    } else if (message.image) {
       const publicId = message.image.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId);
     }
-    // Xóa audio trên Cloudinary
+
     if (message.audio) {
       const publicId = message.audio.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
     }
-    // Xóa file tài liệu trên Cloudinary
     if (message.fileUrl) {
       const publicId = "chat_files/" + message.fileUrl.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(publicId, { resource_type: "raw" }); 
@@ -370,9 +244,6 @@ export const clearChat = async (req, res) => {
   }
 };
 
-/**
- * HÀM BỔ SUNG: Lưu thông báo kết thúc cuộc gọi
- */
 export const saveCallNotification = async (req, res) => {
   try {
     const { id: receiverId } = req.params;
@@ -390,7 +261,7 @@ export const saveCallNotification = async (req, res) => {
       text: callText,
       duration: duration || "00:00",
       callType: callType || "video",
-      messageType: "call", // Đổi sang "call" cho đồng bộ Model enum
+      messageType: "call",
     });
 
     await newMessage.save();

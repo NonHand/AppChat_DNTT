@@ -28,35 +28,34 @@ export const useChatStore = create((set, get) => ({
   isGroupsLoading: false,
 
   getUsers: async () => {
-  // Chỉ hiện loading nếu danh sách đang trống (lần đầu tải)
-  if (get().users.length === 0) set({ isUsersLoading: true }); 
-  try {
-    const res = await axiosInstance.get("/messages/users");
-    set({ users: res.data });
-  } catch (error) {
-    toast.error("Lỗi tải danh sách người dùng");
-  } finally {
-    set({ isUsersLoading: false });
-  }
-},
+    if (get().users.length === 0) set({ isUsersLoading: true }); 
+    try {
+      const res = await axiosInstance.get("/messages/users");
+      set({ users: res.data });
+    } catch (error) {
+      toast.error("Lỗi tải danh sách người dùng");
+    } finally {
+      set({ isUsersLoading: false });
+    }
+  },
 
-getGroups: async () => {
-  if (get().groups.length === 0) set({ isGroupsLoading: true });
-  try {
-    const res = await axiosInstance.get("/groups");
-    set({ groups: res.data });
-    const socket = useAuthStore.getState().socket;
+  getGroups: async () => {
+    if (get().groups.length === 0) set({ isGroupsLoading: true });
+    try {
+      const res = await axiosInstance.get("/groups");
+      set({ groups: res.data });
+      const socket = useAuthStore.getState().socket;
       if (socket) {
         res.data.forEach(group => {
           socket.emit("joinGroup", group._id);
         });
       }
-  } catch (error) {
-    toast.error(error.response?.data?.message || "Lỗi khi tải nhóm");
-  } finally {
-    set({ isGroupsLoading: false });
-  }
-},
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Lỗi khi tải nhóm");
+    } finally {
+      set({ isGroupsLoading: false });
+    }
+  },
 
   getMessages: async (chatId) => {
     set({ isMessagesLoading: true });
@@ -74,20 +73,24 @@ getGroups: async () => {
   sendMessage: async (messageData) => {
     const { selectedUser, messages, users, groups } = get();
     try {
+      // API hiện tại sẽ nhận payload chứa { text, images, audio, file... }
       const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
       const newMessage = res.data;
+
+      // Cập nhật danh sách tin nhắn hiển thị
       set({ messages: [...messages, newMessage] });
 
+      // Cập nhật tin nhắn cuối cùng ở Sidebar để người dùng thấy phản hồi ngay
       if (newMessage.groupId) {
         const updatedGroups = groups.map(g => 
           g._id === newMessage.groupId ? { ...g, lastMessage: newMessage } : g
         ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
-        set({ groups: [...updatedGroups] });
+        set({ groups: updatedGroups });
       } else {
         const updatedUsers = users.map(u => 
           u._id === selectedUser._id ? { ...u, lastMessage: newMessage } : u
         ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
-        set({ users: [...updatedUsers] });
+        set({ users: updatedUsers });
       }
       return newMessage;
     } catch (error) {
@@ -95,35 +98,26 @@ getGroups: async () => {
     }
   },
 
-  /**
-   * CẬP NHẬT: Lưu log cuộc gọi bao gồm thời lượng (duration)
-   */
   saveCallLog: async (receiverId, callData) => {
     const { messages, users, selectedUser } = get();
     const authUser = useAuthStore.getState().authUser;
 
     try {
-      // Gửi callData (chứa duration, callType) lên Backend
       const res = await axiosInstance.post(`/messages/call-notification/${receiverId}`, callData);
-      
-      // Đảm bảo tin nhắn có đầy đủ thông tin sender để render đúng bên phải (isMyMessage)
       const newMessage = {
         ...res.data,
-        senderId: authUser._id, // Hoặc authUser tùy theo cấu trúc ChatContainer của bạn
+        senderId: authUser._id,
       };
 
-      // 1. Cập nhật mảng messages ngay lập tức cho người bấm tắt
       if (selectedUser?._id === receiverId) {
         set({ messages: [...messages, newMessage] });
       }
 
-      // 2. Cập nhật Sidebar (tin nhắn cuối cùng và sắp xếp lại)
       const updatedUsers = users.map(u => 
         u._id === receiverId ? { ...u, lastMessage: newMessage } : u
       ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
       
       set({ users: updatedUsers });
-
       return newMessage;
     } catch (error) {
       console.error("Lỗi khi lưu log cuộc gọi:", error);
@@ -163,7 +157,7 @@ getGroups: async () => {
         ? msgGroupId === currentChatId 
         : (msgSenderId === currentChatId || (msgSenderId === authUser._id.toString() && msgReceiverId === currentChatId));
 
-      // CHỐNG TRÙNG: Không push nếu mình là người gửi vì đã tự update qua saveCallLog/sendMessage
+      // Nhận tin nhắn từ socket (chỉ push nếu không phải do chính mình gửi)
       if (isChatRelevant && msgSenderId !== authUser._id.toString()) {
         const isExisted = messages.some(m => m._id === newMessage._id);
         if (!isExisted) {
@@ -171,6 +165,7 @@ getGroups: async () => {
         }
       } 
       
+      // Xử lý thông báo tin nhắn chưa đọc
       if (msgSenderId !== authUser._id.toString() && chatIdOfIncomingMsg !== currentChatId) {
         const newCounts = {
           ...unreadCounts,
@@ -180,17 +175,18 @@ getGroups: async () => {
         setStoredUnreadCounts(newCounts);
       }
 
+      // Cập nhật tin nhắn cuối và đẩy lên đầu danh sách ở Sidebar
       if (msgGroupId) {
         const updatedGroups = groups.map((g) => 
           g._id.toString() === msgGroupId ? { ...g, lastMessage: newMessage } : g
         ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
-        set({ groups: [...updatedGroups] });
+        set({ groups: updatedGroups });
       } else {
         const partnerId = msgSenderId === authUser._id.toString() ? msgReceiverId : msgSenderId;
         const updatedUsers = users.map((u) => 
           u._id.toString() === partnerId ? { ...u, lastMessage: newMessage } : u
         ).sort((a, b) => new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0));
-        set({ users: [...updatedUsers] });
+        set({ users: updatedUsers });
       }
     });
   },

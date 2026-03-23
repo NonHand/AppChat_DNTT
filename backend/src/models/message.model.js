@@ -19,16 +19,22 @@ const messageSchema = new mongoose.Schema(
     },
     messageType: {
       type: String,
-      // Thống nhất dùng "video_call" cho đồng bộ với socket.js
-      enum: ["text", "image", "video_call", "voice", "file"], 
+      // Đã cập nhật đầy đủ các loại để khớp với controller
+      enum: ["text", "image", "video_call", "voice", "file", "call"], 
       default: "text",
     },
     text: {
       type: String,
     },
+    // --- PHẦN HÌNH ẢNH ---
     image: {
-      type: String,
+      type: String, // Lưu ảnh đầu tiên hoặc ảnh đơn lẻ (tương thích cũ)
     },
+    images: {
+      type: [String], // Mảng lưu trữ nhiều ảnh cùng lúc (tính năng mới)
+      default: [],
+    },
+    // ---------------------
     audio: {
       type: String,
     },
@@ -53,16 +59,24 @@ const messageSchema = new mongoose.Schema(
         default: null 
       },
       duration: { 
-        type: Number, // Tính bằng giây (dễ tính toán hơn)
+        type: Number, // Tính bằng giây
         default: 0 
       },
-      // Thêm để biết là gọi Video hay Voice
       type: {
         type: String,
         enum: ["video", "voice", null],
         default: "video"
       }
     },
+    // Hỗ trợ trường duration dạng chuỗi nếu controller cũ vẫn dùng (ví dụ: "00:15")
+    duration: {
+      type: String,
+      default: null
+    },
+    callType: {
+      type: String,
+      default: null
+    }
   },
   { timestamps: true }
 );

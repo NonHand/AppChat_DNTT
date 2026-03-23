@@ -6,7 +6,7 @@ import Message from "../models/message.model.js";
 const app = express();
 const server = http.createServer(app);
 
-// Khởi tạo Socket.io với cấu hình CORS linh hoạt
+// Cấu hình CORS linh hoạt
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === "production" 
@@ -18,9 +18,6 @@ const io = new Server(server, {
 // Lưu trữ danh sách người dùng online: {userId: socketId}
 const userSocketMap = {}; 
 
-/**
- * Lấy socketId của một user cụ thể từ UserId (MongoDB _id)
- */
 export function getReceiverSocketId(userId) {
   return userSocketMap[userId];
 }
@@ -33,7 +30,7 @@ io.on("connection", (socket) => {
     console.log(`User connected: ${userId} (Socket: ${socket.id})`);
   }
 
-  // Thông báo danh sách user đang online cho tất cả mọi người
+  // Gửi danh sách online
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
   // ==========================================
@@ -44,10 +41,9 @@ io.on("connection", (socket) => {
   socket.on("callUser", ({ userToCall, signalData, from, name }) => {
     const receiverSocketId = getReceiverSocketId(userToCall);
     if (receiverSocketId) {
-      console.log(`📞 Call Request: From ${name} to ${userToCall}`);
       io.to(receiverSocketId).emit("incomingCall", { 
         signal: signalData, 
-        from: from, // Đây là MongoDB _id của người gọi
+        from: from, // User ID của người gọi
         name 
       });
     }
@@ -55,37 +51,37 @@ io.on("connection", (socket) => {
 
   // 2. Trả lời cuộc gọi
   socket.on("answerCall", (data) => {
-    // data.to ở đây là User ID của người gọi
     const callerSocketId = getReceiverSocketId(data.to) || data.to; 
     if (callerSocketId) {
       io.to(callerSocketId).emit("callAccepted", data.signal);
     }
   });
 
-  // 3. Trao đổi thông tin mạng (ICE Candidates) - FIX LỖI KẾT NỐI 2 CHIỀU
+  // 3. ICE Candidates - PHẦN QUAN TRỌNG ĐỂ CÓ VIDEO 2 CHIỀU
   socket.on("ice-candidate", (data) => {
-    // Tìm socketId dựa trên User ID hoặc dùng trực tiếp nếu nó là socketId
+    // Luôn ưu tiên tìm SocketId từ UserId để gửi chính xác
     const targetSocketId = userSocketMap[data.to] || data.to;
     
     if (targetSocketId) {
+      // Gửi object chứa key candidate để FE bóc tách dễ dàng
       io.to(targetSocketId).emit("ice-candidate", { 
         candidate: data.candidate 
       });
     }
   });
 
-  // 4. Kết thúc và LƯU LỊCH SỬ CUỘC GỌI - FIX LỖI MẤT TIN NHẮN LOG
+  // 4. Kết thúc và Lưu tin nhắn Log
   socket.on("endCall", async ({ to, duration, senderId }) => {
-    // to: ID đối phương, senderId: ID người nhấn kết thúc
     const targetSocketId = userSocketMap[to] || to;
     
     if (targetSocketId) {
       io.to(targetSocketId).emit("endCall");
     }
 
+    // Logic lưu vào DB
     try {
       if (senderId && to) {
-        // Tìm đúng User ID người nhận (phòng trường hợp 'to' là socketId)
+        // Đảm bảo lấy được MongoDB ID (receiverUserId)
         let receiverUserId = to;
         for (const [uId, sId] of Object.entries(userSocketMap)) {
           if (sId === to) {
@@ -94,7 +90,6 @@ io.on("connection", (socket) => {
           }
         }
 
-        // Tạo bản ghi tin nhắn loại video_call
         const callMessage = new Message({
           senderId: senderId,
           receiverId: receiverUserId,
@@ -108,22 +103,20 @@ io.on("connection", (socket) => {
 
         await callMessage.save();
 
-        // Phát tin nhắn mới cho cả 2 bên để cập nhật UI ngay lập tức
+        // Phát tin nhắn mới cho cả 2 để update UI chat
         const receiverSocketId = getReceiverSocketId(receiverUserId);
         const senderSocketId = getReceiverSocketId(senderId);
 
         if (receiverSocketId) io.to(receiverSocketId).emit("newMessage", callMessage);
         if (senderSocketId) io.to(senderSocketId).emit("newMessage", callMessage);
-        
-        console.log(`💾 Call Log Saved: ${duration}s from ${senderId} to ${receiverUserId}`);
       }
     } catch (error) {
-      console.error("❌ Lỗi khi lưu lịch sử cuộc gọi:", error);
+      console.error("Error saving call log:", error);
     }
   });
 
   // ==========================================
-  // LOGIC CHAT NHÓM & DISCONNECT
+  // LOGIC CHAT NHÓM (Giữ nguyên)
   // ==========================================
   socket.on("joinGroup", (groupId) => {
     socket.join(groupId);
@@ -133,6 +126,9 @@ io.on("connection", (socket) => {
     socket.leave(groupId);
   });
 
+  // ==========================================
+  // DISCONNECT (Giữ nguyên)
+  // ==========================================
   socket.on("disconnect", () => {
     if (userId) {
       console.log(`User disconnected: ${userId}`);

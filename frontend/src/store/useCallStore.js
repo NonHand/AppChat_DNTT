@@ -24,14 +24,15 @@ export const useCallStore = create((set, get) => ({
   setupIceCandidateListener: () => {
     const { socket } = useAuthStore.getState();
     
-    socket.off("ice-candidate"); // Tránh lặp listener
+    // Xóa listener cũ để tránh trùng lặp khi gọi nhiều lần
+    socket.off("ice-candidate");
 
     socket.on("ice-candidate", async ({ candidate }) => {
       const { peerConnection } = get();
       if (peerConnection && candidate) {
         try {
           await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log("✅ Đã kết nối ICE Candidate");
+          console.log("✅ Đã nạp ICE Candidate từ đối phương thành công");
         } catch (error) {
           console.error("❌ Lỗi nạp ICE Candidate:", error);
         }
@@ -42,7 +43,6 @@ export const useCallStore = create((set, get) => ({
   // --- 2. KHỞI TẠO CUỘC GỌI (Người gọi) ---
   initiateCall: async (selectedUser) => {
     const { socket, authUser } = useAuthStore.getState();
-    get().setupIceCandidateListener();
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -55,16 +55,20 @@ export const useCallStore = create((set, get) => ({
         ]
       });
 
+      // Lắng nghe ứng viên mạng của chính mình để gửi đi
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit("ice-candidate", { to: selectedUser._id, candidate: event.candidate });
         }
       };
 
+      // Khi nhận được stream từ đối phương
       pc.ontrack = (event) => {
+        console.log("🎬 Nhận được stream từ đối phương");
         set({ userStream: event.streams[0] });
       };
 
+      // Add camera/mic của mình vào kết nối
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const offer = await pc.createOffer();
@@ -78,6 +82,7 @@ export const useCallStore = create((set, get) => ({
       });
 
       set({ peerConnection: pc });
+      // Ghi chú: setupIceCandidateListener sẽ được gọi trong handleCallAccepted đối với người gọi
     } catch (err) {
       console.error("Lỗi Camera/Micro:", err);
       set({ isCalling: false });
@@ -88,6 +93,8 @@ export const useCallStore = create((set, get) => ({
   answerCall: async () => {
     const { socket, authUser } = useAuthStore.getState();
     const { caller } = get();
+    
+    // Người nhận cần lắng nghe ICE ngay lập tức
     get().setupIceCandidateListener();
 
     try {
@@ -113,6 +120,7 @@ export const useCallStore = create((set, get) => ({
       };
 
       pc.ontrack = (event) => {
+        console.log("🎬 Nhận được stream từ đối phương (Người nhận)");
         set({ userStream: event.streams[0] });
       };
 
@@ -129,32 +137,28 @@ export const useCallStore = create((set, get) => ({
     }
   },
 
-  // --- 4. KẾT THÚC CUỘC GỌI (Sửa lỗi mất tin nhắn log) ---
+  // --- 4. KẾT THÚC CUỘC GỌI ---
   leaveCall: () => {
     const { socket, authUser } = useAuthStore.getState();
     const { peerConnection, myStream, remoteUser, caller, startTime, callAccepted } = get();
 
-    // Tính thời lượng (giây)
     const duration = (startTime && callAccepted) ? Math.floor((Date.now() - startTime) / 1000) : 0;
 
-    // Ngắt camera/mic
     if (myStream) {
       myStream.getTracks().forEach(track => track.stop());
     }
 
-    // Đóng kết nối Peer
     if (peerConnection) {
       peerConnection.close();
     }
 
-    // Xác định người nhận để gửi endCall và lưu Log
     const targetId = remoteUser?._id || caller?.from;
 
     if (targetId) {
       socket.emit("endCall", { 
         to: targetId, 
         duration: duration,
-        senderId: authUser._id // QUAN TRỌNG: Backend cần cái này để lưu tin nhắn
+        senderId: authUser._id 
       });
     }
 
@@ -175,12 +179,17 @@ export const useCallStore = create((set, get) => ({
 
   setIncomingCall: (data) => set({ isReceivingCall: true, caller: data }),
   
+  // --- 5. XỬ LÝ KHI ĐỐI PHƯƠNG CHẤP NHẬN (Quan trọng để fix 2 chiều) ---
   handleCallAccepted: async (signal) => {
     const { peerConnection } = get();
     if (peerConnection) {
       try {
+        // NGƯỜI GỌI: Phải bắt đầu lắng nghe ICE Candidate ngay khi người kia bắt máy
+        get().setupIceCandidateListener(); 
+
         await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
         set({ callAccepted: true, startTime: Date.now() });
+        console.log("✅ Đã thông suốt kết nối WebRTC 2 chiều");
       } catch (error) {
         console.error("❌ Lỗi setRemoteDescription:", error);
       }

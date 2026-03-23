@@ -4,8 +4,9 @@ import Group from "../models/group.model.js";
 
 import cloudinary from "../lib/cloudinary.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
+import { decrypt, encrypt } from "../lib/encryption.js";
 
-export const getUsersForSidebar = async (req, res) => {
+/* export const getUsersForSidebar = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
     const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
@@ -33,9 +34,52 @@ export const getUsersForSidebar = async (req, res) => {
     console.error("Error in getUsersForSidebar: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
+}; */
+
+export const getUsersForSidebar = async (req, res) => {
+  try {
+    const loggedInUserId = req.user._id;
+    const users = await User.find({ _id: { $ne: loggedInUserId } }).select("-password").lean();
+
+    const usersWithLastMsg = await Promise.all(
+      users.map(async (user) => {
+        const lastMessage = await Message.findOne({
+          $or: [
+            { senderId: loggedInUserId, receiverId: user._id },
+            { senderId: user._id, receiverId: loggedInUserId },
+          ],
+        }).sort({ createdAt: -1 });
+
+        // --- PHẦN THÊM MỚI: GIẢI MÃ TIN NHẮN ---
+        let processedLastMessage = null;
+        if (lastMessage) {
+          // Chuyển Document thành Object thuần để có thể chỉnh sửa field text
+          processedLastMessage = { ...lastMessage }; 
+          
+          if (processedLastMessage.text) {
+            // Giải mã nội dung tin nhắn trước khi trả về cho Sidebar
+            processedLastMessage.text = decrypt(processedLastMessage.text);
+          }
+        }
+        // ---------------------------------------
+
+        return {
+          ...user,
+          lastMessage: processedLastMessage, // Trả về tin nhắn đã giải mã
+          lastMsgTime: lastMessage ? lastMessage.createdAt : user.createdAt,
+        };
+      })
+    );
+
+    usersWithLastMsg.sort((a, b) => new Date(b.lastMsgTime) - new Date(a.lastMsgTime));
+    res.status(200).json(usersWithLastMsg);
+  } catch (error) {
+    console.error("Error in getUsersForSidebar: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
 };
 
-export const getMessages = async (req, res) => {
+/* export const getMessages = async (req, res) => {
   try {
     const { id: chatPartnerId } = req.params;
     const myId = req.user._id;
@@ -61,10 +105,50 @@ export const getMessages = async (req, res) => {
     console.log("Error in getMessages controller: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
+}; */
+
+export const getMessages = async (req, res) => {
+  try {
+    const { id: chatPartnerId } = req.params;
+    const myId = req.user._id;
+
+    const isGroup = await Group.exists({ _id: chatPartnerId });
+
+    let messages;
+    if (isGroup) {
+      messages = await Message.find({ groupId: chatPartnerId })
+        .populate("senderId", "fullName profilePic")
+        .sort({ createdAt: 1 });
+    } else {
+      messages = await Message.find({
+        $or: [
+          { senderId: myId, receiverId: chatPartnerId },
+          { senderId: chatPartnerId, receiverId: myId },
+        ],
+      }).sort({ createdAt: 1 });
+    }
+
+    // --- PHẦN GIẢI MÃ TIN NHẮN ---
+    const decryptedMessages = messages.map((msg) => {
+      const messageObj = msg.toObject();
+
+      if (messageObj.text) {
+        messageObj.text = decrypt(messageObj.text);
+      }
+
+      return messageObj;
+    });
+    // ----------------------------
+
+    res.status(200).json(decryptedMessages);
+  } catch (error) {
+    console.log("Error in getMessages controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
 };
 
 // Gửi tin nhắn (Cập nhật hỗ trợ: Image, Audio, và FILE TÀI LIỆU)
-export const sendMessage = async (req, res) => {
+/* export const sendMessage = async (req, res) => {
   try {
     const { text, image, audio, file, fileName, fileSize } = req.body;
     const { id: receiverOrGroupId } = req.params;
@@ -128,6 +212,87 @@ export const sendMessage = async (req, res) => {
     }
 
     res.status(201).json(newMessage);
+  } catch (error) {
+    console.log("Error in sendMessage controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+}; */
+
+export const sendMessage = async (req, res) => {
+  try {
+    const { text, image, audio, file, fileName, fileSize } = req.body;
+    const { id: receiverOrGroupId } = req.params;
+    const senderId = req.user._id;
+
+    let imageUrl;
+    if (image) {
+      const uploadResponse = await cloudinary.uploader.upload(image);
+      imageUrl = uploadResponse.secure_url;
+    }
+
+    let audioUrl;
+    if (audio) {
+      const uploadResponse = await cloudinary.uploader.upload(audio, {
+        resource_type: "video",
+        folder: "voice_messages",
+      });
+      audioUrl = uploadResponse.secure_url;
+    }
+
+    // XỬ LÝ UPLOAD FILE (PDF, Docx, Zip...)
+    let fileUrl;
+    if (file) {
+      const uploadResponse = await cloudinary.uploader.upload(file, {
+        resource_type: "auto",
+        folder: "chat_files",
+      });
+      fileUrl = uploadResponse.secure_url;
+    }
+
+    const isGroup = await Group.exists({ _id: receiverOrGroupId });
+
+    // --- PHẦN MÃ HÓA TEXT ---
+    const encryptedText = text ? encrypt(text) : text;
+    // ------------------------
+
+    const newMessageData = {
+      senderId,
+      text: encryptedText, // Lưu bản đã mã hóa vào Database
+      image: imageUrl,
+      audio: audioUrl,
+      fileUrl: fileUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      messageType: fileUrl ? "file" : audio ? "voice" : image ? "image" : "text",
+    };
+
+    if (isGroup) {
+      newMessageData.groupId = receiverOrGroupId;
+    } else {
+      newMessageData.receiverId = receiverOrGroupId;
+    }
+
+    const newMessage = new Message(newMessageData);
+    await newMessage.save();
+
+    // --- CHUẨN BỊ DỮ LIỆU GỬI ĐI (BẢN RÕ) ---
+    // Tạo bản sao để gửi qua Socket và Response mà không làm hỏng bản mã hóa trong DB
+    const messageToSend = newMessage.toObject();
+    messageToSend.text = text; // Gán lại nội dung chưa mã hóa để hiển thị ngay trên UI
+    // ---------------------------------------
+
+    // SOCKET REALTIME - Gửi bản rõ (messageToSend)
+    if (isGroup) {
+      io.to(receiverOrGroupId).emit("newMessage", messageToSend);
+    } else {
+      const receiverSocketId = getReceiverSocketId(receiverOrGroupId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newMessage", messageToSend);
+      }
+    }
+
+    // RESPONSE - Trả về bản rõ
+    res.status(201).json(messageToSend);
   } catch (error) {
     console.log("Error in sendMessage controller: ", error.message);
     res.status(500).json({ error: "Internal server error" });
